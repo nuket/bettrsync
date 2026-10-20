@@ -29,12 +29,37 @@ pub struct RecvStats {
     pub warnings: u64,
 }
 
+/// One entry of the sender's list.
+#[derive(Debug)]
+pub struct WireEntry {
+    pub id: u32,
+    pub kind: u8,
+    pub path: Vec<u8>,
+    pub size: u64,
+    pub mode: u32,
+    pub mtime_s: i64,
+    pub mtime_ns: u32,
+    pub target: Vec<u8>,
+}
+
+/// The receiver's answer for one entry.
+#[derive(Debug, Clone, Copy)]
+pub struct Decision {
+    pub id: u32,
+    pub kind: u8,
+    pub dest_size: u64,
+}
+
+/// Entries and decisions travel in batches: one message for a hundred
+/// thousand small files would be as bad as one message each.
+pub const BATCH: usize = 256;
+
 #[derive(Debug)]
 pub enum Msg {
     Hello { version: u32, single_file: bool },
-    Entry { id: u32, kind: u8, path: Vec<u8>, size: u64, mode: u32, mtime_s: i64, mtime_ns: u32, target: Vec<u8> },
+    Entries(Vec<WireEntry>),
     EntriesDone,
-    Decision { id: u32, kind: u8, dest_size: u64 },
+    Decisions(Vec<Decision>),
     Hashes { id: u32, first: u64, hashes: Vec<u128> },
     Data { id: u32, offset: u64, data: Vec<u8> },
     FileDone { id: u32 },
@@ -45,9 +70,9 @@ pub enum Msg {
 }
 
 const T_HELLO: u8 = 1;
-const T_ENTRY: u8 = 2;
+const T_ENTRIES: u8 = 2;
 const T_ENTRIES_DONE: u8 = 3;
-const T_DECISION: u8 = 4;
+const T_DECISIONS: u8 = 4;
 const T_HASHES: u8 = 5;
 const T_DATA: u8 = 6;
 const T_FILE_DONE: u8 = 7;
@@ -107,6 +132,15 @@ fn get_bytes<R: Read>(r: &mut R) -> io::Result<Vec<u8>> {
     Ok(v)
 }
 
+/// A batch's length, within reason.
+fn count<R: Read>(r: &mut R) -> io::Result<usize> {
+    let n = get_u32(r)? as usize;
+    if n > MAX_BYTES / 16 {
+        return Err(bad(format!("a batch of {n} is too many")));
+    }
+    Ok(n)
+}
+
 fn bad(what: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, what)
 }
@@ -118,23 +152,31 @@ pub fn write_msg<W: Write>(w: &mut W, m: &Msg) -> io::Result<()> {
             put_u32(w, *version)?;
             put_u8(w, *single_file as u8)
         }
-        Msg::Entry { id, kind, path, size, mode, mtime_s, mtime_ns, target } => {
-            put_u8(w, T_ENTRY)?;
-            put_u32(w, *id)?;
-            put_u8(w, *kind)?;
-            put_bytes(w, path)?;
-            put_u64(w, *size)?;
-            put_u32(w, *mode)?;
-            put_u64(w, *mtime_s as u64)?;
-            put_u32(w, *mtime_ns)?;
-            put_bytes(w, target)
+        Msg::Entries(entries) => {
+            put_u8(w, T_ENTRIES)?;
+            put_u32(w, entries.len() as u32)?;
+            for e in entries {
+                put_u32(w, e.id)?;
+                put_u8(w, e.kind)?;
+                put_bytes(w, &e.path)?;
+                put_u64(w, e.size)?;
+                put_u32(w, e.mode)?;
+                put_u64(w, e.mtime_s as u64)?;
+                put_u32(w, e.mtime_ns)?;
+                put_bytes(w, &e.target)?;
+            }
+            Ok(())
         }
         Msg::EntriesDone => put_u8(w, T_ENTRIES_DONE),
-        Msg::Decision { id, kind, dest_size } => {
-            put_u8(w, T_DECISION)?;
-            put_u32(w, *id)?;
-            put_u8(w, *kind)?;
-            put_u64(w, *dest_size)
+        Msg::Decisions(decisions) => {
+            put_u8(w, T_DECISIONS)?;
+            put_u32(w, decisions.len() as u32)?;
+            for d in decisions {
+                put_u32(w, d.id)?;
+                put_u8(w, d.kind)?;
+                put_u64(w, d.dest_size)?;
+            }
+            Ok(())
         }
         Msg::Hashes { id, first, hashes } => {
             put_u8(w, T_HASHES)?;
@@ -178,18 +220,32 @@ pub fn write_msg<W: Write>(w: &mut W, m: &Msg) -> io::Result<()> {
 pub fn read_msg<R: Read>(r: &mut R) -> io::Result<Msg> {
     Ok(match get_u8(r)? {
         T_HELLO => Msg::Hello { version: get_u32(r)?, single_file: get_u8(r)? != 0 },
-        T_ENTRY => Msg::Entry {
-            id: get_u32(r)?,
-            kind: get_u8(r)?,
-            path: get_bytes(r)?,
-            size: get_u64(r)?,
-            mode: get_u32(r)?,
-            mtime_s: get_u64(r)? as i64,
-            mtime_ns: get_u32(r)?,
-            target: get_bytes(r)?,
-        },
+        T_ENTRIES => {
+            let n = count(r)?;
+            let mut entries = Vec::with_capacity(n);
+            for _ in 0..n {
+                entries.push(WireEntry {
+                    id: get_u32(r)?,
+                    kind: get_u8(r)?,
+                    path: get_bytes(r)?,
+                    size: get_u64(r)?,
+                    mode: get_u32(r)?,
+                    mtime_s: get_u64(r)? as i64,
+                    mtime_ns: get_u32(r)?,
+                    target: get_bytes(r)?,
+                });
+            }
+            Msg::Entries(entries)
+        }
         T_ENTRIES_DONE => Msg::EntriesDone,
-        T_DECISION => Msg::Decision { id: get_u32(r)?, kind: get_u8(r)?, dest_size: get_u64(r)? },
+        T_DECISIONS => {
+            let n = count(r)?;
+            let mut decisions = Vec::with_capacity(n);
+            for _ in 0..n {
+                decisions.push(Decision { id: get_u32(r)?, kind: get_u8(r)?, dest_size: get_u64(r)? });
+            }
+            Msg::Decisions(decisions)
+        }
         T_HASHES => {
             let id = get_u32(r)?;
             let first = get_u64(r)?;

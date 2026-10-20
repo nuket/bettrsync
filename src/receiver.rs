@@ -122,6 +122,11 @@ impl Shared {
     fn send(&self, m: Msg) {
         let _ = self.sink.tx.send(m);
     }
+
+    /// Answers for one entry; the writer batches these.
+    fn decide(&self, d: Decision) {
+        self.send(Msg::Decisions(vec![d]));
+    }
 }
 
 pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: RecvOpts) -> io::Result<RecvStats> {
@@ -165,16 +170,32 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Recv
         ftrace: crate::trace::Trace::new("receiver file pool"),
     });
 
+    // The writer folds the decisions it finds queued together into one
+    // message; the rest go as they are, in order.
     let writer = thread::spawn(move || -> io::Result<()> {
         let mut w = BufWriter::with_capacity(1 << 20, w);
+        let mut decisions: Vec<Decision> = Vec::new();
+        let put = |w: &mut BufWriter<Box<dyn Write + Send>>, m: Msg, decisions: &mut Vec<Decision>| -> io::Result<()> {
+            if let Msg::Decisions(d) = m {
+                decisions.extend(d);
+                return Ok(());
+            }
+            if !decisions.is_empty() {
+                write_msg(w, &Msg::Decisions(std::mem::take(decisions)))?;
+            }
+            write_msg(w, &m)
+        };
         while let Ok(m) = rx.recv() {
-            write_msg(&mut w, &m)?;
+            put(&mut w, m, &mut decisions)?;
             loop {
                 match rx.try_recv() {
-                    Ok(m) => write_msg(&mut w, &m)?,
+                    Ok(m) => put(&mut w, m, &mut decisions)?,
                     Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => return w.flush(),
+                    Err(mpsc::TryRecvError::Disconnected) => break,
                 }
+            }
+            if !decisions.is_empty() {
+                write_msg(&mut w, &Msg::Decisions(std::mem::take(&mut decisions)))?;
             }
             w.flush()?;
         }
@@ -214,9 +235,13 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
         };
         trace.add("reading messages", t);
         match msg {
-            Msg::Entry { id, kind, path, size, mode, mtime_s, mtime_ns, target } => {
-                let ent = Ent { kind, rel: path, size, mode, mtime_s, mtime_ns, target };
-                shared.entries.lock().unwrap().0.push_back((id, ent));
+            Msg::Entries(entries) => {
+                let mut e = shared.entries.lock().unwrap();
+                for w in entries {
+                    let ent = Ent { kind: w.kind, rel: w.path, size: w.size, mode: w.mode, mtime_s: w.mtime_s, mtime_ns: w.mtime_ns, target: w.target };
+                    e.0.push_back((w.id, ent));
+                }
+                drop(e);
                 shared.ecv.notify_one();
             }
             Msg::EntriesDone => {
@@ -370,12 +395,12 @@ fn decide(shared: &Arc<Shared>) {
         match ent.kind {
             KIND_DIR => {
                 let kind = decide_dir(shared, &ent);
-                shared.send(Msg::Decision { id, kind, dest_size: 0 });
+                shared.decide(Decision { id, kind, dest_size: 0 });
                 trace.add("dirs", t);
             }
             KIND_LINK => {
                 let kind = decide_link(shared, &ent);
-                shared.send(Msg::Decision { id, kind, dest_size: 0 });
+                shared.decide(Decision { id, kind, dest_size: 0 });
                 trace.add("links", t);
             }
             _ => {
@@ -453,7 +478,7 @@ fn queue_file(shared: &Arc<Shared>, pool: &Arc<Pool>, id: u32, ent: Ent, trace: 
         let mut open = shared.open.lock().unwrap();
         while open.len() >= shared.opts.max_open {
             if shared.dead.load(Ordering::Relaxed) {
-                shared.send(Msg::Decision { id, kind: DEC_FAIL, dest_size: 0 });
+                shared.decide(Decision { id, kind: DEC_FAIL, dest_size: 0 });
                 return;
             }
             open = shared.ocv.wait_timeout(open, TICK).unwrap().0;
@@ -467,7 +492,7 @@ fn queue_file(shared: &Arc<Shared>, pool: &Arc<Pool>, id: u32, ent: Ent, trace: 
         let t = Instant::now();
         let (kind, dest_size) = open_file(&shared, &pool, id, &ent);
         shared.ftrace.add(if kind == DEC_SKIP { "skipping" } else { "opening" }, t);
-        shared.send(Msg::Decision { id, kind, dest_size });
+        shared.decide(Decision { id, kind, dest_size });
     });
 }
 

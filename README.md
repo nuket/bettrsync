@@ -85,7 +85,9 @@ flight at a time, fewer if the descriptor limit does not allow it.
 Hashes are xxh3, 128 bits, over blocks of `-B` bytes, read in chunks of
 8 MiB so the reads are large and sequential.  The protocol is a few
 message types with a tag byte and little-endian fields, the same over an
-ssh pipe or a socket pair in one process.
+ssh pipe or a socket pair in one process; entries and decisions travel
+in batches of up to 256, so a tree of a hundred thousand files is a few
+hundred messages each way rather than a hundred thousand.
 
 ## Building and testing
 
@@ -130,21 +132,22 @@ either way, so the whole-file copy is at the ssh ceiling:
 Pulling works at the same rate: the 4 GiB file came back at 277 MiB/s,
 and `-c` on an unchanged hot copy compared both sides in 0.64 s.
 
-A tree of 108,000 files of 512 B to 16 KiB in 211 directories with
-1,000 links, 867 MiB, on the same two systems; a round changes 1,000
+A tree of 110,000 files of 512 B to 16 KiB in 211 directories with
+1,000 links, 882 MiB, on the same two systems; a round changes 1,000
 files and adds 500.  The receiver runs a few VMs, so these move by a
 few tenths from run to run:
 
-    rsync new tree, cold                   6.75 s
-    bettrsync new tree, cold               3.62 s   (at 252 MiB/s, the wire)
-    rsync, unchanged, hot                  0.63 s
-    bettrsync, unchanged, hot              0.39 s
-    bettrsync -c, unchanged, hot           0.80 s
-    rsync, 1500 changed, cold              1.21 s
-    rsync, 1500 changed, hot               0.50 s
-    bettrsync, 1500 changed, cold          0.66 s
-    bettrsync, 1500 changed, hot           0.55 s
+    rsync new tree, cold                   7.11 s
+    bettrsync new tree, cold               3.49 s   (at 252 MiB/s, the wire)
+    rsync, unchanged, hot                  0.70 s
+    bettrsync, unchanged, hot              0.44 s
+    bettrsync -c, unchanged, hot           0.97 s
+    rsync, 1500 changed, cold              1.27 s
+    rsync, 1500 changed, hot               0.51 s
+    bettrsync, 1500 changed, cold          0.45 s
+    bettrsync, 1500 changed, hot           0.32 s
 
-The unchanged pass is 0.11 s of ssh startup, 0.03 s of scanning, and
-about 2 µs an entry on each side for the exchange; `-c` on an unchanged
-tree hashes every file on both sides without touching any of them.
+Run on their own, three times each, the unchanged pass takes 0.30 to
+0.32 s, of which ssh startup is 0.11 s and the scan 0.03 s, and `-c`
+takes 0.52 to 0.58 s, hashing every file on both sides without
+touching any of them.

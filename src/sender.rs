@@ -209,18 +209,22 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         })
     };
 
-    for (i, e) in entries.iter().enumerate() {
-        tx.send(Msg::Entry {
-            id: i as u32,
-            kind: e.kind,
-            path: e.rel.clone(),
-            size: e.size,
-            mode: e.mode,
-            mtime_s: e.mtime_s,
-            mtime_ns: e.mtime_ns,
-            target: e.target.clone(),
-        })
-        .map_err(|_| gone())?;
+    for (first, batch) in entries.chunks(BATCH).enumerate().map(|(i, b)| (i * BATCH, b)) {
+        let batch = batch
+            .iter()
+            .enumerate()
+            .map(|(i, e)| WireEntry {
+                id: (first + i) as u32,
+                kind: e.kind,
+                path: e.rel.clone(),
+                size: e.size,
+                mode: e.mode,
+                mtime_s: e.mtime_s,
+                mtime_ns: e.mtime_ns,
+                target: e.target.clone(),
+            })
+            .collect();
+        tx.send(Msg::Entries(batch)).map_err(|_| gone())?;
     }
     tx.send(Msg::EntriesDone).map_err(|_| gone())?;
 
@@ -372,8 +376,10 @@ fn read_loop(shared: &Shared, r: Box<dyn Read + Send>) -> io::Result<()> {
         let msg = read_msg(&mut r)?;
         trace.add("reading messages", t);
         match msg {
-            Msg::Decision { id, kind, dest_size } => {
-                shared.decisions.lock().unwrap().push_back((id, kind, dest_size));
+            Msg::Decisions(decisions) => {
+                let mut d = shared.decisions.lock().unwrap();
+                d.extend(decisions.iter().map(|d| (d.id, d.kind, d.dest_size)));
+                drop(d);
                 shared.dcv.notify_one();
             }
             Msg::Hashes { id, first, hashes } => {
