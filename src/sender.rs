@@ -100,6 +100,7 @@ struct Shared {
     unchanged: AtomicU64,
     new_files: AtomicU64,
     failed: AtomicU64,
+    pool_trace: crate::trace::Trace,
 }
 
 /// A chunk read and (for a delta) hashed by the pool.
@@ -176,6 +177,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         unchanged: AtomicU64::new(0),
         new_files: AtomicU64::new(0),
         failed: AtomicU64::new(0),
+        pool_trace: crate::trace::Trace::new("sender pool"),
     });
 
     // The scan.
@@ -280,6 +282,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
     drop(pool);
     drop(res_tx);
     let _ = comparer.join();
+    shared.pool_trace.report();
     outcome?;
 
     let stats = {
@@ -459,13 +462,20 @@ fn feed_file(shared: &Arc<Shared>, pool: &Pool, res_tx: &mpsc::SyncSender<Res>, 
     for chunk in chunks {
         let file = file.clone();
         let res_tx = res_tx.clone();
+        let shared = shared.clone();
         pool.run(move || {
+            let t = Instant::now();
             let data = pool::read_chunk(&file, chunk.offset, chunk.len);
+            shared.pool_trace.add("reading", t);
+            let t = Instant::now();
             let hashes = match (&data, delta) {
                 (Ok(d), true) => pool::hash_blocks(d, block as usize),
                 _ => Vec::new(),
             };
+            shared.pool_trace.add("hashing", t);
+            let t = Instant::now();
             let _ = res_tx.send(Res { id, first_block: chunk.first_block, offset: chunk.offset, data, hashes, delta });
+            shared.pool_trace.add("handing over", t);
         });
     }
     Ok(())
