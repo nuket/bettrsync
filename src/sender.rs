@@ -108,6 +108,8 @@ struct Res {
     first_block: u64,
     offset: u64,
     data: io::Result<Vec<u8>>,
+    /// The blocks' hashes, for a delta.
+    hashes: Vec<u128>,
     delta: bool,
 }
 
@@ -128,20 +130,30 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("expected a hello, got {m:?}"))),
     }
 
-    let (tx, rx) = mpsc::sync_channel::<Msg>(64);
+    let (tx, rx) = mpsc::sync_channel::<Msg>(16);
     let writer = thread::spawn(move || -> io::Result<()> {
+        let trace = crate::trace::Trace::new("sender writer");
         let mut w = BufWriter::with_capacity(1 << 20, w);
         while let Ok(m) = rx.recv() {
+            let t = Instant::now();
             write_msg(&mut w, &m)?;
+            trace.add("writing messages", t);
             loop {
                 match rx.try_recv() {
-                    Ok(m) => write_msg(&mut w, &m)?,
+                    Ok(m) => {
+                        let t = Instant::now();
+                        write_msg(&mut w, &m)?;
+                        trace.add("writing messages", t);
+                    }
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => return w.flush(),
                 }
             }
+            let t = Instant::now();
             w.flush()?;
+            trace.add("flushing", t);
         }
+        trace.report();
         w.flush()
     });
     let shared = Arc::new(Shared {
@@ -350,8 +362,12 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
 
 fn read_loop(shared: &Shared, r: Box<dyn Read + Send>) -> io::Result<()> {
     let mut r = BufReader::with_capacity(1 << 20, r);
+    let trace = crate::trace::Trace::new("sender reader");
     loop {
-        match read_msg(&mut r)? {
+        let t = Instant::now();
+        let msg = read_msg(&mut r)?;
+        trace.add("reading messages", t);
+        match msg {
             Msg::Decision { id, kind, dest_size } => {
                 shared.decisions.lock().unwrap().push_back((id, kind, dest_size));
                 shared.dcv.notify_one();
@@ -372,6 +388,7 @@ fn read_loop(shared: &Shared, r: Box<dyn Read + Send>) -> io::Result<()> {
             Msg::Finished { stats } => {
                 *shared.finished.lock().unwrap() = Some(stats);
                 shared.fcv.notify_all();
+                trace.report();
                 return Ok(());
             }
             Msg::Report { text } => {
@@ -444,7 +461,11 @@ fn feed_file(shared: &Arc<Shared>, pool: &Pool, res_tx: &mpsc::SyncSender<Res>, 
         let res_tx = res_tx.clone();
         pool.run(move || {
             let data = pool::read_chunk(&file, chunk.offset, chunk.len);
-            let _ = res_tx.send(Res { id, first_block: chunk.first_block, offset: chunk.offset, data, delta });
+            let hashes = match (&data, delta) {
+                (Ok(d), true) => pool::hash_blocks(d, block as usize),
+                _ => Vec::new(),
+            };
+            let _ = res_tx.send(Res { id, first_block: chunk.first_block, offset: chunk.offset, data, hashes, delta });
         });
     }
     Ok(())
@@ -453,7 +474,11 @@ fn feed_file(shared: &Arc<Shared>, pool: &Pool, res_tx: &mpsc::SyncSender<Res>, 
 /// The comparer: each chunk against the receiver's hashes of it.
 fn compare_loop(shared: &Arc<Shared>, rx: mpsc::Receiver<Res>) {
     let block = shared.opts.block;
-    while let Ok(res) = rx.recv() {
+    let trace = crate::trace::Trace::new("sender comparer");
+    loop {
+        let t = Instant::now();
+        let Ok(res) = rx.recv() else { break };
+        trace.add("waiting for chunks", t);
         let mut changed = 0u64;
         let mut bytes = 0u64;
         let mut failed = false;
@@ -470,8 +495,10 @@ fn compare_loop(shared: &Arc<Shared>, rx: mpsc::Receiver<Res>) {
                     let dest_blocks = shared.inflight.lock().unwrap().get(&res.id).map(|p| p.dest_blocks).unwrap_or(0);
                     let last = (res.first_block + n as u64).min(dest_blocks);
                     if res.first_block < last {
-                        let mine = pool::hash_blocks(&data, block);
+                        let mine = &res.hashes;
+                        let t = Instant::now();
                         let theirs = wait_hashes(shared, res.id, res.first_block, last);
+                        trace.add("waiting for their hashes", t);
                         let Some(theirs) = theirs else { break };
                         for (i, h) in theirs.iter().enumerate() {
                             differs[i] = *h != mine[i];
@@ -495,9 +522,11 @@ fn compare_loop(shared: &Arc<Shared>, rx: mpsc::Receiver<Res>) {
                     bytes += (to - from) as u64;
                     if shared.opts.commit {
                         let m = Msg::Data { id: res.id, offset: res.offset + from as u64, data: data[from..to].to_vec() };
+                        let t = Instant::now();
                         if shared.sink.tx.send(m).is_err() {
                             return;
                         }
+                        trace.add("queueing data", t);
                     }
                 }
             }
@@ -539,6 +568,7 @@ fn compare_loop(shared: &Arc<Shared>, rx: mpsc::Receiver<Res>) {
             shared.icv.notify_all();
         }
     }
+    trace.report();
 }
 
 /// The receiver's hashes of blocks [first, last) of file `id`, once they

@@ -1,7 +1,7 @@
 //! The threads that read and hash blocks, and the block geometry both
 //! sides agree on: a file is hashed in blocks of `block` bytes, read from
-//! disk in chunks of CHUNK_BLOCKS blocks so the reads are large and
-//! sequential while the hashes stay fine-grained.
+//! disk in chunks of CHUNK_BYTES (or one block, if larger) so the reads
+//! are large and sequential while the hashes stay fine-grained.
 
 use std::fs::File;
 use std::io;
@@ -11,7 +11,7 @@ use std::thread;
 
 use xxhash_rust::xxh3::xxh3_128;
 
-pub const CHUNK_BLOCKS: u64 = 64;
+pub const CHUNK_BYTES: u64 = 8 << 20;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
@@ -64,7 +64,7 @@ pub struct Chunk {
 /// The chunks a file of `len` bytes is read in.
 pub fn chunks(len: u64, block: usize) -> Vec<Chunk> {
     let block = block as u64;
-    let chunk_len = block * CHUNK_BLOCKS;
+    let chunk_len = block * (CHUNK_BYTES / block).max(1);
     let mut out = Vec::new();
     let mut offset = 0;
     while offset < len {

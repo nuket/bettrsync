@@ -180,8 +180,20 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Recv
 
 fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<RecvStats> {
     let mut r = BufReader::with_capacity(1 << 20, r);
+    let mut finished: Option<RecvStats> = None;
+    let trace = crate::trace::Trace::new("receiver");
     loop {
-        match read_msg(&mut r)? {
+        let t = Instant::now();
+        let msg = match read_msg(&mut r) {
+            Ok(m) => m,
+            Err(e) if finished.is_some() && e.kind() == io::ErrorKind::UnexpectedEof => {
+                trace.report();
+                return Ok(finished.take().unwrap());
+            }
+            Err(e) => return Err(e),
+        };
+        trace.add("reading messages", t);
+        match msg {
             Msg::Entry { id, kind, path, size, mode, mtime_s, mtime_ns, target } => {
                 let ent = Ent { kind, rel: path, size, mode, mtime_s, mtime_ns, target };
                 shared.entries.lock().unwrap().0.push_back((id, ent));
@@ -194,7 +206,10 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
             Msg::Data { id, offset, data } => {
                 let file = shared.open.lock().unwrap().get(&id).and_then(|o| o.file.clone());
                 if let Some(file) = file {
-                    if let Err(e) = file.write_all_at(&data, offset) {
+                    let t = Instant::now();
+                    let wrote = file.write_all_at(&data, offset);
+                    trace.add("writing files", t);
+                    if let Err(e) = wrote {
                         let path = shared.open.lock().unwrap().get(&id).map(|o| o.path.clone()).unwrap_or_default();
                         shared.sink.warn(format!("{}: write failed: {e}", path.display()));
                     } else {
@@ -237,7 +252,8 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                     stats.hash_secs = (b - a).as_secs_f64();
                 }
                 shared.send(Msg::Finished { stats: stats.clone() });
-                return Ok(stats);
+                // The sender's summary still comes; read until it hangs up.
+                finished = Some(stats);
             }
             Msg::Report { text } => {
                 if shared.opts.local {

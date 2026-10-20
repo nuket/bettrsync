@@ -14,6 +14,7 @@ mod proto;
 mod receiver;
 mod scan;
 mod sender;
+mod trace;
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};
@@ -42,7 +43,7 @@ contents, without it the directory itself.  Either end may be remote,
                        size or modification time differs
   -q, --quiet          no listing, only the summary
   -v, --verbose        the listing (default)
-  -B, --block-size N   the block size, K, M or G suffix (default 128K)
+  -B, --block-size N   the block size, K, M or G suffix (default 64K)
   -j, --threads N      threads for hashing and scanning (default: the cores)
   -e, --rsh COMMAND    how to reach a remote host (default: ssh)
       --remote-bin P   bettrsync on the remote host (default: bettrsync)
@@ -84,7 +85,7 @@ fn parse_args() -> Opts {
         commit: false,
         checksum: false,
         quiet: false,
-        block: 128 << 10,
+        block: 64 << 10,
         threads: thread::available_parallelism().map(|n| n.get()).unwrap_or(4),
         rsh: "ssh".to_string(),
         remote_bin: "bettrsync".to_string(),
