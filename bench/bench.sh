@@ -41,8 +41,8 @@ now() { date +%s.%N; }
 cold() {
     sync
     dd if="$IMG" iflag=nocache count=0 status=none
-    if sudo -n true 2>/dev/null; then echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null; else echo "(no sudo here: only the image evicted)"; fi
-    remote "sync; dd if=bench/image.img iflag=nocache count=0 status=none; if sudo -n true 2>/dev/null; then echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null; else echo '(no sudo there: only the image evicted)'; fi"
+    echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || echo "(no sudo here: only the image evicted)"
+    remote "sync; test -f bench/image.img && dd if=bench/image.img iflag=nocache count=0 status=none; echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || echo '(no sudo there: only the image evicted)'"
 }
 
 hot() {
