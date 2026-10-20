@@ -32,6 +32,20 @@ pub fn set_mtime_fd(file: &File, s: i64, ns: u32) -> io::Result<()> {
     Ok(())
 }
 
+/// Makes sure this process may have `want` files open, raising the
+/// soft limit as far as the hard one allows, and says how many it may.
+pub fn allow_open_files(want: u64) -> u64 {
+    let mut lim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+        return want;
+    }
+    if (lim.rlim_cur as u64) < want {
+        lim.rlim_cur = (want as libc::rlim_t).min(lim.rlim_max);
+        unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) };
+    }
+    lim.rlim_cur as u64
+}
+
 /// Removes whatever is at `path`: a directory with its contents, or
 /// anything else as one entry.
 pub fn remove_any(path: &Path) -> io::Result<()> {

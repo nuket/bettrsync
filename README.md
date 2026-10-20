@@ -70,14 +70,17 @@ back over ssh's stderr).
 
 The sender scans the sources with several threads and sends the list.
 The receiver walks it in order, making directories and links, and
-answers for each file: skip, send whole, or update in place.  For an
-update it opens the file and queues its blocks for hashing on a thread
-pool; each chunk's hashes go back as soon as they are done.  The sender
-reads and hashes its copy on its own pool, and a comparer thread matches
-each chunk against the receiver's hashes as they arrive, queueing the
+hands each file to a small pool that looks at the destination and
+answers: skip, send whole, or update in place.  For an update it opens
+the file and queues its blocks for hashing on a thread pool; each
+chunk's hashes go back as soon as they are done.  The sender reads and
+hashes its copy on its own pool, and a comparer thread matches each
+chunk against the receiver's hashes as they arrive, queueing the
 differing blocks, coalesced into runs, for the wire.  The receiver
-writes them at their offsets, then truncates, stamps the time, and for a
-new file renames it into place.  Up to 64 files are in flight at a time.
+writes them at their offsets, and the file pool then truncates, stamps
+the time, and for a new file renames it into place, so the thread on
+the wire never waits for the file system.  Up to 1,024 files are in
+flight at a time, fewer if the descriptor limit does not allow it.
 
 Hashes are xxh3, 128 bits, over blocks of `-B` bytes, read in chunks of
 8 MiB so the reads are large and sequential.  The protocol is a few
@@ -93,7 +96,10 @@ binary runs on any glibc from 2.31 up; otherwise it runs `cargo build`.
 image changed in place, shrunk and grown.  `bench/bench.sh BIN USER@HOST
 SCRATCHDIR [GIB] [CHANGES]` times `rsync --inplace` against bettrsync
 on a changed image over ssh, page caches cold and hot on both sides,
-verifying the copies after every write.
+verifying the copies after every write.  `bench/tree.sh BIN USER@HOST
+SCRATCHDIR [FILES] [CHANGES]` does the same with a tree of many small
+files against `rsync -rlt`, verifying paths, sizes, times, links and
+contents.
 
 On a 4 GiB image with 200 changed spots, over a 1 Gbps link from a
 6-core VM to a 16-core desktop:
@@ -123,3 +129,17 @@ either way, so the whole-file copy is at the ssh ceiling:
 
 Pulling works at the same rate: the 4 GiB file came back at 277 MiB/s,
 and `-c` on an unchanged hot copy compared both sides in 0.64 s.
+
+A tree of 102,000 files of 512 B to 16 KiB in 211 directories with
+1,000 links, 820 MiB, on the same two systems; a round changes 1,000
+files and adds 500:
+
+    rsync new tree, cold                   5.82 s
+    bettrsync new tree, cold               3.57 s   (at 252 MiB/s, the wire)
+    rsync, unchanged, hot                  0.64 s
+    bettrsync, unchanged, hot              0.37 s
+    bettrsync -c, unchanged, hot           0.88 s
+    rsync, 1500 changed, cold              1.09 s
+    rsync, 1500 changed, hot               0.53 s
+    bettrsync, 1500 changed, cold          0.58 s
+    bettrsync, 1500 changed, hot           0.31 s

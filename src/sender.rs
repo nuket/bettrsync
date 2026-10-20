@@ -8,7 +8,7 @@
 //! takes each chunk, waits for the receiver's hashes of the same blocks,
 //! and queues the differing ones for the writer, which puts everything on
 //! the wire.  The main thread feeds the pool, in the order the receiver
-//! decides, up to MAX_OPEN files at a time.
+//! decides, up to `max_open` files at a time.
 
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
@@ -23,7 +23,6 @@ use crate::pool::{self, Pool};
 use crate::proto::*;
 use crate::scan::{self, Entry, Source};
 
-const MAX_OPEN: usize = 64;
 const TICK: Duration = Duration::from_millis(200);
 
 pub struct SendOpts {
@@ -31,6 +30,8 @@ pub struct SendOpts {
     pub commit: bool,
     pub block: usize,
     pub threads: usize,
+    /// Files in flight at a time.
+    pub max_open: usize,
     pub quiet: bool,
     pub local: bool,
 }
@@ -410,7 +411,7 @@ fn feed_file(shared: &Arc<Shared>, pool: &Pool, res_tx: &mpsc::SyncSender<Res>, 
     let block = shared.opts.block as u64;
     {
         let mut i = shared.inflight.lock().unwrap();
-        while i.len() >= MAX_OPEN {
+        while i.len() >= shared.opts.max_open {
             if shared.dead.load(Ordering::Relaxed) {
                 return Err(gone());
             }

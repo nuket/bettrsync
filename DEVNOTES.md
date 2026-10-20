@@ -24,6 +24,9 @@ done and what was found.
   benchmark against `rsync --inplace`; the cold runs need
   `sudo -n tee /proc/sys/vm/drop_caches` without a password on both
   machines (a sudoers.d line), else only the image's pages are evicted.
+  `bench/tree.sh BIN USER@HOST SCRATCHDIR [FILES] [CHANGES]` is the
+  same for a tree of many small files, against `rsync -rlt`.  Both
+  take `BENCH_SSH` and `BENCH_REMOTE_BIN`.
 - `BETTRSYNC_TRACE=1` makes every thread print where its time went,
   on both sides; put it in `--remote-bin "BETTRSYNC_TRACE=1 bettrsync"`
   for the far side.  Read the "sender pool reading" figure first when a
@@ -41,8 +44,21 @@ done and what was found.
   send less: 16K 71 MiB, 32K 74, 64K 80, 128K 93, 1M 261.
 - Existing files are updated in place; new files go to a temp name
   beside them and are renamed at the end.
-- Up to 64 files in flight on each side, a slot freed at FileDone, so
-  neither side runs out of descriptors on big trees.
+- Up to 1,024 files in flight on each side, a slot freed at FileDone,
+  so neither side runs out of descriptors on big trees.  main raises
+  the soft descriptor limit to make room for twice that (both sides
+  may be one process) and lowers the window if the hard limit stops
+  it.  It was 64, which held 512 KiB of 8 KiB files: less than the
+  2 ms of pipeline between the sides at 275 MB/s, so a tree of small
+  files ran at 29,000 files/s with the wire half idle.
+- The receiver opens, creates and finishes files on a pool of up to 8
+  threads, not on the thread reading the wire: at one thread the file
+  system's create-write-stamp-rename cycle was the ceiling, 26,000
+  files/s on Wonderslice; at four it does 75,000, and more threads do
+  not help (ext4 serializes on the directory).  Decisions therefore
+  reach the sender in roughly, not exactly, scan order, and so does
+  the listing.  Directories and links are still made in order, by the
+  decider, before the files in them are handed out.
 - No permissions, owner, group, or `--delete`.  Nanosecond mtimes,
   compared to the nanosecond (second-only comparison skipped a file
   changed within the second it was made).
@@ -85,10 +101,33 @@ the scan (0.11 s, mostly ssh startup) plus a read of both copies in
 parallel, with the 70 to 90 MiB of changed blocks going over while
 hashing continues.
 
+### Trees of small files (bench/tree.sh)
+
+102,000 files of 512 B to 16 KiB in 211 directories, 1,000 links,
+820 MiB; a round rewrites 1,000 files and adds 500.  Before the file
+pool and the larger window: new tree 4.10 s cold, 1,500 changed 1.22
+cold / 0.45 hot.  The trace showed the receiver's wire-reading thread
+spending 2.45 s of 3.8 finishing files (truncate, stamp, close,
+rename) and the decider 2.9 s creating them, both single-threaded;
+moving both onto a file pool alone gave 3.55 s, because the window of
+64 files was then the limit (the decider waited 3.1 s for slots).  With
+1,024 in flight: new tree 3.57 s cold at 252 MiB/s, the sender's writer
+flushing 3.1 s of 3.3, so the wire; 1,500 changed 0.58 cold / 0.31 hot;
+unchanged 0.37 hot; `-c` on an unchanged tree 0.88.  rsync: new tree
+5.82, changed 1.09 / 0.53, unchanged 0.64.  The big-image numbers did
+not move (old and new binaries alternated, cold `-c`, within 0.02 s).
+
+A directory's own size (the `%s` of `find` on it) differs between
+trees filled serially and in parallel; the tree fingerprint leaves it
+out.
+
 ## Not yet done
 
-- Trees of many small files have not been benchmarked; the per-file
-  protocol cost is untested at scale.
+- Trees of many small files: a new tree now goes at the wire, but the
+  per-file cost of an unchanged tree (0.37 s for 103k entries, hot) and
+  of `-c` on one (0.88 s) has not been looked at.  Two sources with the
+  same relative path in both now race on the receiver's file pool
+  where the later one used to win.
 - Larger-than-RAM images on the receiving side, for a truly cold
   receiver.
 - ssh is the only transport.  At 2.5 GbE one stream carries 275 MB/s

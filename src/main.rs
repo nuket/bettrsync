@@ -27,6 +27,9 @@ use std::thread;
 
 use scan::Source;
 
+/// The most files either side keeps in flight at a time.
+const MAX_OPEN: usize = 1024;
+
 const USAGE: &str = "\
 usage: bettrsync [OPTIONS] SOURCE... DESTINATION
 
@@ -212,6 +215,9 @@ fn fail(e: io::Error) -> ! {
 
 fn main() {
     let opts = parse_args();
+    // Files in flight on each side: as many as the descriptor limit
+    // leaves room for, with both sides in this process at worst.
+    let max_open = ((fsutil::allow_open_files(2 * MAX_OPEN as u64 + 256).saturating_sub(256)) / 2).clamp(16, MAX_OPEN as u64) as usize;
 
     // The far end of an ssh connection: the protocol on stdin and stdout.
     if let Some(send) = opts.server {
@@ -222,10 +228,10 @@ fn main() {
         }
         let clean = if send {
             let sources = opts.paths.iter().map(|p| source_of(p)).collect();
-            sender::run(stdin, stdout, sender::SendOpts { sources, commit: opts.commit, block: opts.block, threads: opts.threads, quiet: opts.quiet, local: false })
+            sender::run(stdin, stdout, sender::SendOpts { sources, commit: opts.commit, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, local: false })
         } else {
             let dest = PathBuf::from(&opts.paths[0]);
-            receiver::run(stdin, stdout, receiver::RecvOpts { dest, commit: opts.commit, checksum: opts.checksum, block: opts.block, threads: opts.threads, local: false })
+            receiver::run(stdin, stdout, receiver::RecvOpts { dest, commit: opts.commit, checksum: opts.checksum, block: opts.block, threads: opts.threads, max_open, local: false })
                 .map(|stats| stats.warnings == 0)
         };
         process::exit(match clean {
@@ -260,7 +266,7 @@ fn main() {
         let r: Box<dyn Read + Send> = Box::new(child.stdout.take().unwrap());
         let w: Box<dyn Write + Send> = Box::new(child.stdin.take().unwrap());
         let local_sources = sources.iter().map(|s| source_of(s)).collect();
-        let result = sender::run(r, w, sender::SendOpts { sources: local_sources, commit: opts.commit, block: opts.block, threads: opts.threads, quiet: opts.quiet, local: true });
+        let result = sender::run(r, w, sender::SendOpts { sources: local_sources, commit: opts.commit, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, local: true });
         let status = child.wait().unwrap_or_else(|e| fail(e));
         result.map(|clean| clean && status.success())
     } else if any_remote_source {
@@ -269,7 +275,7 @@ fn main() {
         let mut child = remote_command(&opts, hosts[0], true, &paths).spawn().unwrap_or_else(|e| fail(e));
         let r: Box<dyn Read + Send> = Box::new(child.stdout.take().unwrap());
         let w: Box<dyn Write + Send> = Box::new(child.stdin.take().unwrap());
-        let result = receiver::run(r, w, receiver::RecvOpts { dest: PathBuf::from(dest), commit: opts.commit, checksum: opts.checksum, block: opts.block, threads: opts.threads, local: true });
+        let result = receiver::run(r, w, receiver::RecvOpts { dest: PathBuf::from(dest), commit: opts.commit, checksum: opts.checksum, block: opts.block, threads: opts.threads, max_open, local: true });
         let status = child.wait().unwrap_or_else(|e| fail(e));
         result.map(|stats| stats.warnings == 0 && status.success())
     } else {
@@ -277,10 +283,10 @@ fn main() {
         let (a, b) = UnixStream::pair().unwrap_or_else(|e| fail(e));
         let (a2, b2) = (a.try_clone().unwrap_or_else(|e| fail(e)), b.try_clone().unwrap_or_else(|e| fail(e)));
         let dest = PathBuf::from(dest);
-        let ropts = receiver::RecvOpts { dest, commit: opts.commit, checksum: opts.checksum, block: opts.block, threads: opts.threads, local: false };
+        let ropts = receiver::RecvOpts { dest, commit: opts.commit, checksum: opts.checksum, block: opts.block, threads: opts.threads, max_open, local: false };
         let receiver = thread::spawn(move || receiver::run(Box::new(b), Box::new(b2), ropts));
         let local_sources = sources.iter().map(|s| source_of(s)).collect();
-        let result = sender::run(Box::new(a), Box::new(a2), sender::SendOpts { sources: local_sources, commit: opts.commit, block: opts.block, threads: opts.threads, quiet: opts.quiet, local: true });
+        let result = sender::run(Box::new(a), Box::new(a2), sender::SendOpts { sources: local_sources, commit: opts.commit, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, local: true });
         let received = receiver.join().unwrap_or_else(|_| Err(io::Error::other("the receiver thread died")));
         match (result, received) {
             (Ok(clean), Ok(stats)) => Ok(clean && stats.warnings == 0),

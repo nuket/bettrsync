@@ -3,13 +3,16 @@
 //! block-by-block update), hashes the files to update with every core,
 //! and writes what the sender then sends, in place.
 //!
-//! Three threads: the reader, which takes the sender's messages off the
-//! wire and writes file data; the decider, which walks the entries in
-//! order, makes directories and links, opens files and queues their
-//! hashing; and the writer, which puts the messages for the sender on
-//! the wire.  The pool hashes.  Up to MAX_OPEN files are open at a time:
-//! the decider waits for the sender to finish with one before opening
-//! the next, so neither side runs out of descriptors or memory.
+//! Three threads and two pools: the reader takes the sender's messages
+//! off the wire and writes file data; the decider walks the entries in
+//! order, making directories and links itself and handing each file to
+//! the file pool, which stats and opens it (or creates it) and sends the
+//! decision; the writer puts the messages for the sender on the wire.
+//! The hash pool hashes.  A finished file's truncate, timestamp and
+//! rename go to the file pool too, so the reader never waits on the
+//! file system.  Up to `max_open` files are open at a time: the decider
+//! waits for the sender to finish with one before opening the next, so
+//! neither side runs out of descriptors or memory.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsStr;
@@ -27,8 +30,8 @@ use crate::fsutil;
 use crate::pool::{self, Pool};
 use crate::proto::*;
 
-const MAX_OPEN: usize = 64;
 const TICK: Duration = Duration::from_millis(200);
+const FILE_THREADS: usize = 8;
 
 pub struct RecvOpts {
     pub dest: PathBuf,
@@ -36,6 +39,8 @@ pub struct RecvOpts {
     pub checksum: bool,
     pub block: usize,
     pub threads: usize,
+    /// Files in flight at a time.
+    pub max_open: usize,
     /// This process is the one the user ran: warnings go to stderr, and
     /// the sender's report lines to stdout.  Else they go over the wire.
     pub local: bool,
@@ -94,6 +99,11 @@ struct Shared {
     hash_first: Mutex<Option<Instant>>,
     hash_last: Mutex<Option<Instant>>,
     stats: Mutex<RecvStats>,
+    // Opens, creates and finishes files; every job holds the Shared.
+    files: Pool,
+    pending: Mutex<u64>,
+    pcv: Condvar,
+    ftrace: crate::trace::Trace,
 }
 
 impl Shared {
@@ -129,6 +139,8 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Recv
         fs::create_dir_all(&opts.dest)?;
     }
     let (tx, rx) = mpsc::channel::<Msg>();
+    // Past a few threads the file system's own locking takes over.
+    let files = Pool::new(opts.threads.min(FILE_THREADS));
     let shared = Arc::new(Shared {
         single,
         sink: Sink { local: opts.local, tx, warnings: AtomicU64::new(0) },
@@ -143,6 +155,10 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Recv
         hash_first: Mutex::new(None),
         hash_last: Mutex::new(None),
         stats: Mutex::new(RecvStats::default()),
+        files,
+        pending: Mutex::new(0),
+        pcv: Condvar::new(),
+        ftrace: crate::trace::Trace::new("receiver file pool"),
     });
 
     let writer = thread::spawn(move || -> io::Result<()> {
@@ -221,7 +237,18 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                 let open = shared.open.lock().unwrap().remove(&id);
                 shared.ocv.notify_all();
                 if let Some(o) = open {
-                    finish_file(shared, o);
+                    *shared.pending.lock().unwrap() += 1;
+                    let shared = shared.clone();
+                    shared.clone().files.run(move || {
+                        let t = Instant::now();
+                        finish_file(&shared, o);
+                        shared.ftrace.add("finishing", t);
+                        let mut p = shared.pending.lock().unwrap();
+                        *p -= 1;
+                        if *p == 0 {
+                            shared.pcv.notify_all();
+                        }
+                    });
                 }
             }
             Msg::FileAbort { id } => {
@@ -234,7 +261,16 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                 }
             }
             Msg::Finish => {
-                // Every decision was made before the sender said this.
+                // Every decision was made before the sender said this, and
+                // every FileDone came; the finishes may still be running,
+                // and each rename touches its directory's time.
+                {
+                    let mut p = shared.pending.lock().unwrap();
+                    while *p > 0 {
+                        p = shared.pcv.wait_timeout(p, TICK).unwrap().0;
+                    }
+                }
+                shared.ftrace.report();
                 if shared.opts.commit {
                     for (path, s, ns) in shared.dirs.lock().unwrap().iter().rev() {
                         let same = fs::symlink_metadata(path).map(|m| m.mtime() == *s && m.mtime_nsec() as u32 == *ns).unwrap_or(true);
@@ -297,10 +333,13 @@ fn tmp_name(path: &PathBuf) -> PathBuf {
     path.with_file_name(OsStr::from_bytes(&name))
 }
 
-/// The decider: entries in order, each answered with a Decision.
+/// The decider: entries in order, each answered with a Decision; the
+/// files' answers come from the file pool.
 fn decide(shared: &Arc<Shared>) {
-    let pool = Pool::new(shared.opts.threads);
+    let pool = Arc::new(Pool::new(shared.opts.threads));
+    let trace = crate::trace::Trace::new("receiver decider");
     loop {
+        let t = Instant::now();
         let next = {
             let mut e = shared.entries.lock().unwrap();
             loop {
@@ -313,16 +352,30 @@ fn decide(shared: &Arc<Shared>) {
                 e = shared.ecv.wait_timeout(e, TICK).unwrap().0;
             }
         };
-        let Some((id, ent)) = next else { return };
-        let (kind, dest_size) = match ent.kind {
-            KIND_DIR => (decide_dir(shared, &ent), 0),
-            KIND_LINK => (decide_link(shared, &ent), 0),
-            _ => decide_file(shared, &pool, id, &ent),
+        trace.add("waiting for entries", t);
+        let Some((id, ent)) = next else {
+            trace.report();
+            return;
         };
-        shared.send(Msg::Decision { id, kind, dest_size });
+        let t = Instant::now();
+        match ent.kind {
+            KIND_DIR => {
+                let kind = decide_dir(shared, &ent);
+                shared.send(Msg::Decision { id, kind, dest_size: 0 });
+                trace.add("dirs", t);
+            }
+            KIND_LINK => {
+                let kind = decide_link(shared, &ent);
+                shared.send(Msg::Decision { id, kind, dest_size: 0 });
+                trace.add("links", t);
+            }
+            _ => {
+                queue_file(shared, &pool, id, ent, &trace);
+                trace.add("files", t);
+            }
+        }
     }
 }
-
 fn decide_dir(shared: &Shared, ent: &Ent) -> u8 {
     let path = shared.dest_path(&ent.rel);
     let exists = match fs::symlink_metadata(&path) {
@@ -381,7 +434,44 @@ fn decide_link(shared: &Shared, ent: &Ent) -> u8 {
     DEC_WHOLE
 }
 
-fn decide_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64) {
+/// Takes a slot for the file and hands it to the file pool, which
+/// answers for it.  A placeholder holds the slot meanwhile: no data can
+/// come for the file before its decision goes out.
+fn queue_file(shared: &Arc<Shared>, pool: &Arc<Pool>, id: u32, ent: Ent, trace: &crate::trace::Trace) {
+    let path = shared.dest_path(&ent.rel);
+    {
+        let t = Instant::now();
+        let mut open = shared.open.lock().unwrap();
+        while open.len() >= shared.opts.max_open {
+            if shared.dead.load(Ordering::Relaxed) {
+                shared.send(Msg::Decision { id, kind: DEC_FAIL, dest_size: 0 });
+                return;
+            }
+            open = shared.ocv.wait_timeout(open, TICK).unwrap().0;
+        }
+        trace.add("waiting for a slot", t);
+        open.insert(id, Open { file: None, path, tmp: None, size: ent.size, mtime_s: ent.mtime_s, mtime_ns: ent.mtime_ns });
+    }
+    let shared = shared.clone();
+    let pool = pool.clone();
+    shared.clone().files.run(move || {
+        let t = Instant::now();
+        let (kind, dest_size) = open_file(&shared, &pool, id, &ent);
+        shared.ftrace.add(if kind == DEC_SKIP { "skipping" } else { "opening" }, t);
+        shared.send(Msg::Decision { id, kind, dest_size });
+    });
+}
+
+/// Frees the file's slot: it is skipped or failed, so nothing more
+/// comes for it.
+fn release(shared: &Shared, id: u32) {
+    shared.open.lock().unwrap().remove(&id);
+    shared.ocv.notify_all();
+}
+
+/// Looks at the destination and opens, creates, or leaves it: the
+/// decision, and the destination's size for a delta.
+fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64) {
     let path = shared.dest_path(&ent.rel);
     let commit = shared.opts.commit;
     let existing = match fs::symlink_metadata(&path) {
@@ -390,6 +480,7 @@ fn decide_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u6
             // the nanoseconds count too, unless this file system keeps none.
             let same_time = m.mtime() == ent.mtime_s && (m.mtime_nsec() as u32 == ent.mtime_ns || m.mtime_nsec() == 0);
             if !shared.opts.checksum && m.len() == ent.size && same_time {
+                release(shared, id);
                 return (DEC_SKIP, 0);
             }
             Some(m)
@@ -398,6 +489,7 @@ fn decide_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u6
             if commit {
                 if let Err(e) = fsutil::remove_any(&path) {
                     shared.sink.warn(format!("{}: cannot replace: {e}", path.display()));
+                    release(shared, id);
                     return (DEC_FAIL, 0);
                 }
             }
@@ -405,52 +497,40 @@ fn decide_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u6
         }
         Err(_) => None,
     };
-    // A slot: the sender finishes with a file before we open the 65th.
-    {
-        let mut open = shared.open.lock().unwrap();
-        while open.len() >= MAX_OPEN {
-            if shared.dead.load(Ordering::Relaxed) {
+    let opened = match existing {
+        Some(m) => match OpenOptions::new().read(true).write(commit).open(&path) {
+            Ok(f) => {
+                let file = Arc::new(f);
+                queue_hashes(shared, pool, id, file.clone(), m.len().min(ent.size));
+                (file, None, DEC_DELTA, m.len())
+            }
+            Err(e) => {
+                shared.sink.warn(format!("{}: cannot open: {e}", path.display()));
+                release(shared, id);
                 return (DEC_FAIL, 0);
             }
-            open = shared.ocv.wait_timeout(open, TICK).unwrap().0;
-        }
-    }
-    let mut o = Open { file: None, path: path.clone(), tmp: None, size: ent.size, mtime_s: ent.mtime_s, mtime_ns: ent.mtime_ns };
-    let decision = match existing {
-        Some(m) => {
-            let opened = OpenOptions::new().read(true).write(commit).open(&path);
-            match opened {
-                Ok(f) => {
-                    let file = Arc::new(f);
-                    o.file = Some(file.clone());
-                    queue_hashes(shared, pool, id, file, m.len().min(ent.size));
-                    (DEC_DELTA, m.len())
-                }
+        },
+        None => {
+            if !commit {
+                return (DEC_WHOLE, 0);
+            }
+            let tmp = tmp_name(&path);
+            match OpenOptions::new().write(true).create(true).truncate(true).mode(ent.mode | 0o600).open(&tmp) {
+                Ok(f) => (Arc::new(f), Some(tmp), DEC_WHOLE, 0),
                 Err(e) => {
-                    shared.sink.warn(format!("{}: cannot open: {e}", path.display()));
+                    shared.sink.warn(format!("{}: cannot create: {e}", path.display()));
+                    release(shared, id);
                     return (DEC_FAIL, 0);
                 }
             }
         }
-        None => {
-            if commit {
-                let tmp = tmp_name(&path);
-                match OpenOptions::new().write(true).create(true).truncate(true).mode(ent.mode | 0o600).open(&tmp) {
-                    Ok(f) => {
-                        o.file = Some(Arc::new(f));
-                        o.tmp = Some(tmp);
-                    }
-                    Err(e) => {
-                        shared.sink.warn(format!("{}: cannot create: {e}", path.display()));
-                        return (DEC_FAIL, 0);
-                    }
-                }
-            }
-            (DEC_WHOLE, 0)
-        }
     };
-    shared.open.lock().unwrap().insert(id, o);
-    decision
+    let (file, tmp, kind, dest_size) = opened;
+    if let Some(o) = shared.open.lock().unwrap().get_mut(&id) {
+        o.file = Some(file);
+        o.tmp = tmp;
+    }
+    (kind, dest_size)
 }
 
 /// Hashes the first `len` bytes of `file` on the pool, a chunk per job,
