@@ -54,10 +54,15 @@ struct Sink {
 }
 
 impl Sink {
+    /// A line of the listing, which -q leaves out.
     fn line(&self, text: String) {
-        if self.quiet {
-            return;
+        if !self.quiet {
+            self.say(text);
         }
+    }
+
+    /// A line of the summary.
+    fn say(&self, text: String) {
         if self.local {
             println!("{text}");
         } else {
@@ -289,8 +294,8 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
     let there = stats.hashed_bytes;
     let sync_secs = (t_end - t_scan).as_secs_f64();
     let blocks = s.changed_blocks.load(Ordering::Relaxed);
-    s.sink.line(String::new());
-    s.sink.line(format!(
+    s.sink.say(String::new());
+    s.sink.say(format!(
         "scanned   {:6.2} s   {} entries: {} dirs, {} files ({}), {} links",
         (t_scan - t0).as_secs_f64(),
         commas(entries.len() as u64),
@@ -300,7 +305,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         commas(n_links)
     ));
     if here + there > 0 {
-        s.sink.line(format!(
+        s.sink.say(format!(
             "compared  {:6.2} s   hashed {} here, {} there ({}/s)",
             sync_secs,
             human(here),
@@ -308,7 +313,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
             human(((here + there) as f64 / sync_secs.max(1e-9)) as u64)
         ));
     }
-    s.sink.line(format!(
+    s.sink.say(format!(
         "{}  {:6.2} s   {} in {} blocks of {} ({}/s)",
         if s.opts.commit { "sent    " } else { "to send " },
         sync_secs,
@@ -317,7 +322,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         human(s.opts.block as u64),
         human((sent as f64 / sync_secs.max(1e-9)) as u64)
     ));
-    s.sink.line(format!(
+    s.sink.say(format!(
         "total     {:6.2} s   unchanged {}, updated {}, new {} files, {} dirs, {} links, failed {}",
         (t_end - t0).as_secs_f64(),
         commas(s.unchanged.load(Ordering::Relaxed)),
@@ -328,7 +333,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         commas(s.failed.load(Ordering::Relaxed))
     ));
     if !s.opts.commit {
-        s.sink.line("dry run: nothing was written; add --commit to write".to_string());
+        s.sink.say("dry run: nothing was written; add --commit to write".to_string());
     }
     let clean = s.warnings.load(Ordering::Relaxed) == 0 && stats.warnings == 0 && s.failed.load(Ordering::Relaxed) == 0;
 
