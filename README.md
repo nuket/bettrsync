@@ -156,3 +156,20 @@ Run on their own, three times each, the unchanged pass takes 0.30 to
 0.32 s, of which ssh startup is 0.11 s and the scan 0.03 s, and `-c`
 takes 0.52 to 0.58 s, hashing every file on both sides without
 touching any of them.
+
+A million files, 7.87 GiB in 2,101 directories with 10,000 links; a
+round changes 6,666 files and adds 3,334:
+
+    rsync new tree, cold                  47.07 s
+    bettrsync new tree, cold              30.03 s   (279 MiB/s, the wire)
+    rsync, unchanged, hot                  4.66 s
+    bettrsync, unchanged, hot              1.52 s
+    bettrsync -c, unchanged, hot           3.50 s
+    rsync, 10000 changed, cold             9.37 s
+    rsync, 10000 changed, hot              3.92 s
+    bettrsync, 10000 changed, cold         2.76 s
+    bettrsync, 10000 changed, hot          2.04 s
+
+The sender keeps the list of entries until each is decided, about
+300 bytes each: 310 MiB for the million; the receiver peaked at 89
+MiB.

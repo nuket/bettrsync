@@ -196,6 +196,32 @@ The ssh connection is made once a run, whatever the tree: the 0.11 s
 is one key exchange and login, and ControlMaster in the user's ssh
 config would make it about 10 ms.
 
+### A million files (2026-10-21)
+
+`bench/tree.sh ... 1000000 10000`: 1,000,000 files of 512 B to 16 KiB
+in 2,101 directories, 10,000 links, 7.87 GiB; a round rewrites 6,666
+files and adds 3,334.  Every write verified.
+
+    rsync new tree, cold                  47.07 s
+    bettrsync new tree, cold              30.03 s   (279 MiB/s, the wire)
+    rsync, unchanged, hot                  4.66 s
+    bettrsync, unchanged, hot              1.52 s
+    bettrsync -c, unchanged, hot           3.50 s   (7.87 GiB hashed a side)
+    rsync, 10000 changed, cold             9.37 s
+    rsync, 10000 changed, hot              3.92 s
+    bettrsync, 10000 changed, cold         2.76 s
+    bettrsync, 10000 changed, hot          2.04 s
+
+The unchanged pass is 0.74 s of scan (a million lstats on this side,
+overlapped with the receiver's) and 0.68 s after, 1.4 µs an entry a
+side all in.  Peak memory for 1.02M entries: the sender 310 MiB (the
+entry list, about 300 B each, until each is decided), the receiver
+89 MiB, 122 with `-c`.  The 9.8 GB tree is kept at
+`/home/max/.cache/bettrsync-1m/bench/tree` and in `~/bench/tree` on
+Wonderslice (it replaced the 110k tree there; the 110k one is still
+at `/home/max/.cache/bettrsync/bench/tree` here and goes back over on
+the next `bench/tree.sh` run with the default scratch).
+
 ## Not yet done
 
 - Larger-than-RAM trees on the sender: the list of entries is kept in
