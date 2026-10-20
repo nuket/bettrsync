@@ -1,0 +1,7 @@
+/id_testkey
+/id_testkey.pub
+/target/
+/artifacts/
+/.venv/
+__pycache__/
+*.swp
