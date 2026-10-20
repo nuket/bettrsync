@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex};
 use std::thread;
 
+use crate::filter::Excludes;
 use crate::proto::{KIND_DIR, KIND_FILE, KIND_LINK};
 
 /// A source as given on the command line.  With `contents` (a trailing
@@ -40,6 +41,7 @@ struct Walk<'a> {
     queue: Mutex<(Vec<(PathBuf, Vec<u8>)>, usize)>,
     cv: Condvar,
     emit: Emit<'a>,
+    excludes: &'a Excludes,
 }
 
 fn entry_of(rel: Vec<u8>, abs: PathBuf, meta: &std::fs::Metadata, kind: u8, target: Vec<u8>) -> Entry {
@@ -77,8 +79,8 @@ fn classify(rel: Vec<u8>, abs: PathBuf, meta: &std::fs::Metadata, warnings: &mut
     }
 }
 
-pub fn scan(sources: &[Source], threads: usize, emit: Emit) {
-    let walk = Walk { queue: Mutex::new((Vec::new(), 0)), cv: Condvar::new(), emit };
+pub fn scan(sources: &[Source], threads: usize, excludes: &Excludes, emit: Emit) {
+    let walk = Walk { queue: Mutex::new((Vec::new(), 0)), cv: Condvar::new(), emit, excludes };
     {
         let mut queue = walk.queue.lock().unwrap();
         let mut entries = Vec::new();
@@ -167,6 +169,9 @@ fn read_dir(w: &Walk, dir: &Path, rel: &[u8]) {
                         continue;
                     }
                 };
+                if w.excludes.matches(&r, meta.is_dir()) {
+                    continue;
+                }
                 if let Some(entry) = classify(r.clone(), abs.clone(), &meta, &mut warnings) {
                     if entry.kind == KIND_DIR {
                         dirs.push((abs, r));

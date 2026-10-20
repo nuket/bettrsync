@@ -162,4 +162,40 @@ PY
 cmp tree/d0/f0100 tdst/d0/f0100 && ok "repaired with -c" || fail "not repaired with -c"
 "${REMOTE[@]}" -q -c tree/ "fake:$PWD/tdst/" | grep -q 'unchanged 3,6.*updated 0, new 0' && ok "-c clean after" || fail "-c not clean after"
 
+# --exclude: a name anywhere, a directory-only name, an anchored path,
+# a path with ** across levels; the same over the fake rsh.
+echo "== --exclude"
+mkdir -p xsrc/a/cache xsrc/b/cache xsrc/c/deep/er
+echo 1 > xsrc/a/keep; echo 2 > xsrc/a/x.tmp; echo 3 > xsrc/a/cache/c1; echo 4 > xsrc/b/cache/c2
+echo 5 > xsrc/b/top; echo 6 > xsrc/top; echo 7 > xsrc/c/deep/er/leaf.log; echo 8 > xsrc/c/deep/leaf.log
+EXCL=(--exclude '*.tmp' --exclude 'cache/' --exclude '/top' --exclude 'deep/**/leaf.log')
+"$BIN" -q --commit "${EXCL[@]}" xsrc/ xdst/
+test "$(cd xdst && find . -type f | sort | tr '\n' ' ')" = "./a/keep ./b/top " && ok "excluded files" || fail "excluded files: $(cd xdst && find . -type f | sort | tr '\n' ' ')"
+test ! -e xdst/a/cache -a ! -e xdst/top -a -d xdst/c/deep/er && ok "excluded dirs, anchored, kept" || fail "excluded dirs"
+"${REMOTE[@]}" -q --commit "${EXCL[@]}" xsrc/ "fake:$PWD/xdst2/"
+diff -r xdst xdst2 >/dev/null && ok "excludes over rsh" || fail "excludes over rsh"
+
+# --delete: extras go, excluded extras stay, a dry run only lists, and
+# a warning on the sending side deletes nothing.
+echo "== --delete"
+mkdir -p xdst/extra/dir xdst/a/cache
+echo e > xdst/extra/dir/f; echo e > xdst/a/old; echo e > xdst/a/keep.tmp; echo e > xdst/a/cache/stale
+out=$("$BIN" --delete "${EXCL[@]}" xsrc/ xdst/)
+echo "$out" | grep -q '^delete   extra/$' && echo "$out" | grep -q '^delete   a/old$' && ok "dry run lists" || fail "dry run listing: $out"
+echo "$out" | grep -q 'to delete 2' && ok "dry run counts" || fail "dry run count"
+test -e xdst/extra/dir/f -a -e xdst/a/old && ok "dry run deleted nothing" || fail "dry run deleted"
+"$BIN" -q --commit --delete "${EXCL[@]}" xsrc/ xdst/ | grep -q 'deleted 2' && ok "deleted 2" || fail "deleted count"
+test ! -e xdst/extra -a ! -e xdst/a/old && ok "extras gone" || fail "extras remain"
+test -e xdst/a/keep.tmp -a -e xdst/a/cache/stale && ok "excluded extras kept" || fail "excluded extras deleted"
+"$BIN" -q --commit --delete xsrc/ xdst/ | grep -q 'deleted 2' && ok "no excludes: 2 more deleted" || fail "no excludes: deleted count"
+diff -r xsrc xdst >/dev/null && ok "delete makes a mirror" || fail "not a mirror"
+mkdir xsrc/locked; echo l > xsrc/locked/f; chmod 000 xsrc/locked; echo e > xdst/a/extra2
+rc=0; out=$("$BIN" -q --commit --delete xsrc/ xdst/ 2>&1) || rc=$?
+test "$rc" = 1 && echo "$out" | grep -q 'nothing deleted' && test -e xdst/a/extra2 && ok "warning: nothing deleted" || fail "deleted despite a warning (rc $rc): $out"
+chmod 755 xsrc/locked
+"$BIN" -q --commit --delete xsrc/ xdst/ | grep -q 'deleted 1' && test ! -e xdst/a/extra2 && ok "deleted after the fix" || fail "not deleted after the fix"
+echo e > xdst/a/extra3
+"${REMOTE[@]}" -q --commit --delete xsrc/ "fake:$PWD/xdst/" | grep -q 'deleted 1' && test ! -e xdst/a/extra3 && ok "delete over rsh" || fail "delete over rsh"
+diff -r xsrc xdst >/dev/null && ok "mirror over rsh" || fail "not a mirror over rsh"
+
 echo "ALL OK"

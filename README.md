@@ -10,7 +10,7 @@ copied into the destination, keeping modification times to the
 nanosecond.  Symlinks are copied as links.  Permissions, owners and
 groups are not copied: a new file gets the source's permission bits
 under the receiving umask, an existing one keeps its own.  Nothing is
-deleted.
+deleted unless `--delete` says so.
 
 A file the destination already has, of the same size and time, is left
 alone.  One that differs is updated in place: both sides hash it in
@@ -51,11 +51,30 @@ versions, block sizes, and cache states.
     -j, --threads N      threads for hashing and scanning (default: the cores)
     -e, --rsh COMMAND    how to reach a remote host (default: ssh)
         --remote-bin P   bettrsync on the remote host (default: bettrsync)
+        --exclude PAT    leave out what matches PAT; may be given more than once
+        --delete         remove from the destination what the source does not have
 
 A source with a trailing slash contributes its contents, `src/`; without
 it the directory itself goes into the destination, `dst/src`, as with
 rsync.  A single file to a path that is not a directory is copied to
 that name.
+
+`--exclude` reads its pattern as rsync does.  A pattern without a slash
+matches a name anywhere in the tree, `*.tmp`; with a slash it matches
+the path under the destination, `build/cache`, anchored at the top if
+it starts with a slash, `/top`, and otherwise anywhere on a directory
+boundary.  A trailing slash matches directories only, `cache/`.  `*`
+matches within a name, `**` across slashes, `?` one character, `[a-z]`
+a class, `\` escapes.  An excluded directory is not entered at all.
+
+`--delete` removes, from each directory the source has, whatever the
+source does not: files, links, and directories with everything in
+them.  It runs after the files are written and before the directories
+are stamped.  Excluded things are left alone on both sides, so
+`--exclude cache/ --delete` neither copies caches nor removes the ones
+the destination has.  A dry run lists what would go, as `delete`.  If the
+sending side had any warning, an unreadable directory for one, nothing
+is deleted, since the list it sent may be short.
 
 Smaller blocks send less when the changes are small and scattered: on a
 4 GiB image with 200 changed spots of 4 KiB to 1 MiB, 16K blocks sent

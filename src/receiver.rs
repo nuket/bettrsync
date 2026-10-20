@@ -14,7 +14,7 @@
 //! waits for the sender to finish with one before opening the next, so
 //! neither side runs out of descriptors or memory.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -26,6 +26,7 @@ use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::filter::Excludes;
 use crate::fsutil;
 use crate::pool::{self, Pool};
 use crate::proto::*;
@@ -44,6 +45,10 @@ pub struct RecvOpts {
     /// This process is the one the user ran: warnings go to stderr, and
     /// the sender's report lines to stdout.  Else they go over the wire.
     pub local: bool,
+    pub quiet: bool,
+    pub excludes: Arc<Excludes>,
+    /// Remove what the destination has that the source does not.
+    pub delete: bool,
 }
 
 struct Ent {
@@ -69,14 +74,22 @@ struct Open {
     touched: bool,
 }
 
-/// Where warnings go.
+/// Where warnings and listing lines go.
 struct Sink {
     local: bool,
+    quiet: bool,
     tx: mpsc::Sender<Msg>,
     warnings: AtomicU64,
 }
 
 impl Sink {
+    /// A line of the listing, printed by the sender; -q leaves it out.
+    fn line(&self, text: String) {
+        if !self.quiet {
+            let _ = self.tx.send(Msg::Report { text });
+        }
+    }
+
     fn warn(&self, text: String) {
         self.warnings.fetch_add(1, Ordering::Relaxed);
         if self.local {
@@ -97,7 +110,9 @@ struct Shared {
     ecv: Condvar,
     open: Mutex<HashMap<u32, Open>>,
     ocv: Condvar,
-    dirs: Mutex<Vec<(PathBuf, i64, u32)>>,
+    dirs: Mutex<Vec<(PathBuf, Vec<u8>, i64, u32)>>,
+    // Every path the sender listed, for --delete.
+    listed: Mutex<HashSet<Vec<u8>>>,
     dead: AtomicBool,
     hashed_bytes: AtomicU64,
     hash_first: Mutex<Option<Instant>>,
@@ -152,13 +167,14 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Recv
     let files = Pool::new(opts.threads.min(FILE_THREADS));
     let shared = Arc::new(Shared {
         single,
-        sink: Sink { local: opts.local, tx, warnings: AtomicU64::new(0) },
+        sink: Sink { local: opts.local, quiet: opts.quiet, tx, warnings: AtomicU64::new(0) },
         opts,
         entries: Mutex::new((VecDeque::new(), false)),
         ecv: Condvar::new(),
         open: Mutex::new(HashMap::new()),
         ocv: Condvar::new(),
         dirs: Mutex::new(Vec::new()),
+        listed: Mutex::new(HashSet::new()),
         dead: AtomicBool::new(false),
         hashed_bytes: AtomicU64::new(0),
         hash_first: Mutex::new(None),
@@ -238,6 +254,12 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
             Msg::Entries(entries) => {
                 let mut e = shared.entries.lock().unwrap();
                 debug_assert!(!e.1, "entries after EntriesDone");
+                if shared.opts.delete {
+                    let mut listed = shared.listed.lock().unwrap();
+                    for w in &entries {
+                        listed.insert(w.path.clone());
+                    }
+                }
                 for w in entries {
                     let ent = Ent { kind: w.kind, rel: w.path, size: w.size, mode: w.mode, mtime_s: w.mtime_s, mtime_ns: w.mtime_ns, target: w.target };
                     e.0.push_back((w.id, ent));
@@ -296,7 +318,7 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                     }
                 }
             }
-            Msg::Finish => {
+            Msg::Finish { sender_warnings } => {
                 // Every decision was made before the sender said this, and
                 // every FileDone came; the finishes may still be running,
                 // and each rename touches its directory's time.
@@ -309,8 +331,15 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                 shared.ftrace.report();
                 debug_assert!(shared.open.lock().unwrap().is_empty(), "files still open at Finish: a slot was not given back");
                 debug_assert!(shared.entries.lock().unwrap().1, "Finish before EntriesDone");
+                if shared.opts.delete {
+                    if sender_warnings > 0 {
+                        shared.sink.warn(format!("{sender_warnings} warnings on the sending side: nothing deleted"));
+                    } else {
+                        delete_extras(shared);
+                    }
+                }
                 if shared.opts.commit {
-                    for (path, s, ns) in shared.dirs.lock().unwrap().iter().rev() {
+                    for (path, _, s, ns) in shared.dirs.lock().unwrap().iter().rev() {
                         let same = fs::symlink_metadata(path).map(|m| m.mtime() == *s && m.mtime_nsec() as u32 == *ns).unwrap_or(true);
                         if !same {
                             if let Err(e) = fsutil::set_mtime(path, *s, *ns) {
@@ -437,7 +466,7 @@ fn decide_dir(shared: &Shared, ent: &Ent) -> u8 {
             return DEC_FAIL;
         }
     }
-    shared.dirs.lock().unwrap().push((path, ent.mtime_s, ent.mtime_ns));
+    shared.dirs.lock().unwrap().push((path, ent.rel.clone(), ent.mtime_s, ent.mtime_ns));
     if exists {
         DEC_SKIP
     } else {
@@ -472,6 +501,50 @@ fn decide_link(shared: &Shared, ent: &Ent) -> u8 {
     }
     shared.stats.lock().unwrap().links_made += 1;
     DEC_WHOLE
+}
+
+/// --delete: whatever the destination's directories hold that the
+/// sender did not list goes, unless an exclude pattern protects it.
+/// Runs at Finish, after the last rename and before the directories
+/// are stamped.
+fn delete_extras(shared: &Shared) {
+    let listed = shared.listed.lock().unwrap();
+    let dirs = shared.dirs.lock().unwrap();
+    for (path, rel, _, _) in dirs.iter() {
+        let items = match fs::read_dir(path) {
+            Ok(items) => items,
+            Err(e) => {
+                shared.sink.warn(format!("{}: cannot list for --delete: {e}", path.display()));
+                continue;
+            }
+        };
+        for item in items {
+            let Ok(item) = item else { continue };
+            let name = item.file_name();
+            let mut child = rel.clone();
+            if !child.is_empty() {
+                child.push(b'/');
+            }
+            child.extend_from_slice(name.as_bytes());
+            if listed.contains(&child) {
+                continue;
+            }
+            let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if shared.opts.excludes.matches(&child, is_dir) {
+                continue;
+            }
+            let full = path.join(&name);
+            shared.sink.line(format!("delete   {}{}", String::from_utf8_lossy(&child), if is_dir { "/" } else { "" }));
+            if shared.opts.commit {
+                let gone = if is_dir { fs::remove_dir_all(&full) } else { fs::remove_file(&full) };
+                if let Err(e) = gone {
+                    shared.sink.warn(format!("{}: cannot delete: {e}", full.display()));
+                    continue;
+                }
+            }
+            shared.stats.lock().unwrap().deleted += 1;
+        }
+    }
 }
 
 /// Takes a slot for the file and hands it to the file pool, which

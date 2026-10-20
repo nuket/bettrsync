@@ -20,6 +20,7 @@ use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::filter::Excludes;
 use crate::fsutil::{commas, human};
 use crate::pool::{self, Pool};
 use crate::proto::*;
@@ -36,6 +37,8 @@ pub struct SendOpts {
     pub max_open: usize,
     pub quiet: bool,
     pub local: bool,
+    pub excludes: Arc<Excludes>,
+    pub delete: bool,
 }
 
 /// What a file in flight has come to.
@@ -264,7 +267,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
                     }
                 }
             };
-            scan::scan(&shared.opts.sources, shared.opts.threads, &emit);
+            scan::scan(&shared.opts.sources, shared.opts.threads, &shared.opts.excludes, &emit);
             let rest = std::mem::take(&mut shared.list.lock().unwrap().pending);
             let sent = (rest.is_empty() || tx.send(Msg::Entries(rest)).is_ok()) && tx.send(Msg::EntriesDone).is_ok();
             if !sent {
@@ -340,7 +343,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
             }
         }
         debug_assert!(shared.inflight.lock().unwrap().is_empty(), "files in flight at Finish");
-        tx.send(Msg::Finish).map_err(|_| gone())?;
+        tx.send(Msg::Finish { sender_warnings: shared.warnings.load(Ordering::Relaxed) }).map_err(|_| gone())?;
         Ok(())
     })();
     drop(pool);
@@ -407,15 +410,17 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         human(s.opts.block as u64),
         human((sent as f64 / sync_secs.max(1e-9)) as u64)
     ));
+    let deleted = if s.opts.delete { format!(", {} {}", if s.opts.commit { "deleted" } else { "to delete" }, commas(stats.deleted)) } else { String::new() };
     s.sink.say(format!(
-        "total     {:6.2} s   unchanged {}, updated {}, new {} files, {} dirs, {} links, failed {}",
+        "total     {:6.2} s   unchanged {}, updated {}, new {} files, {} dirs, {} links, failed {}{}",
         (t_end - t0).as_secs_f64(),
         commas(s.unchanged.load(Ordering::Relaxed)),
         commas(s.updated.load(Ordering::Relaxed)),
         commas(s.new_files.load(Ordering::Relaxed)),
         commas(new_dirs),
         commas(new_links),
-        commas(s.failed.load(Ordering::Relaxed))
+        commas(s.failed.load(Ordering::Relaxed)),
+        deleted
     ));
     if !s.opts.commit {
         s.sink.say("dry run: nothing was written; add --commit to write".to_string());

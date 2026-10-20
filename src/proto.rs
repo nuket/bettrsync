@@ -27,6 +27,7 @@ pub struct RecvStats {
     pub hashed_bytes: u64,
     pub hash_secs: f64,
     pub warnings: u64,
+    pub deleted: u64,
 }
 
 /// One entry of the sender's list.
@@ -64,7 +65,9 @@ pub enum Msg {
     Data { id: u32, offset: u64, data: Vec<u8> },
     FileDone { id: u32 },
     FileAbort { id: u32 },
-    Finish,
+    /// The sender's last word, with how many warnings it had: with any,
+    /// the receiver deletes nothing.
+    Finish { sender_warnings: u64 },
     Finished { stats: RecvStats },
     Report { text: String },
 }
@@ -202,10 +205,13 @@ pub fn write_msg<W: Write>(w: &mut W, m: &Msg) -> io::Result<()> {
             put_u8(w, T_FILE_ABORT)?;
             put_u32(w, *id)
         }
-        Msg::Finish => put_u8(w, T_FINISH),
+        Msg::Finish { sender_warnings } => {
+            put_u8(w, T_FINISH)?;
+            put_u64(w, *sender_warnings)
+        }
         Msg::Finished { stats } => {
             put_u8(w, T_FINISHED)?;
-            for v in [stats.dirs_made, stats.links_made, stats.files_written, stats.bytes_written, stats.hashed_bytes, stats.warnings] {
+            for v in [stats.dirs_made, stats.links_made, stats.files_written, stats.bytes_written, stats.hashed_bytes, stats.warnings, stats.deleted] {
                 put_u64(w, v)?;
             }
             put_u64(w, stats.hash_secs.to_bits())
@@ -262,9 +268,9 @@ pub fn read_msg<R: Read>(r: &mut R) -> io::Result<Msg> {
         T_DATA => Msg::Data { id: get_u32(r)?, offset: get_u64(r)?, data: get_bytes(r)? },
         T_FILE_DONE => Msg::FileDone { id: get_u32(r)? },
         T_FILE_ABORT => Msg::FileAbort { id: get_u32(r)? },
-        T_FINISH => Msg::Finish,
+        T_FINISH => Msg::Finish { sender_warnings: get_u64(r)? },
         T_FINISHED => {
-            let mut v = [0u64; 6];
+            let mut v = [0u64; 7];
             for x in v.iter_mut() {
                 *x = get_u64(r)?;
             }
@@ -277,6 +283,7 @@ pub fn read_msg<R: Read>(r: &mut R) -> io::Result<Msg> {
                     bytes_written: v[3],
                     hashed_bytes: v[4],
                     warnings: v[5],
+                    deleted: v[6],
                     hash_secs,
                 },
             }

@@ -99,7 +99,17 @@ done and what was found.
   the unchanged pass on 110k files and 0.35 s off `-c`, where the
   decisions were a larger share of the traffic.  Local to local, on a
   socket pair, it made no difference.
-- No permissions, owner, group, or `--delete`.  Nanosecond mtimes,
+- `--exclude` prunes the sender's scan (an excluded directory is never
+  read) and protects on the receiver's `--delete`; the same patterns
+  go to both sides, so pulling excludes too.  The matcher is rsync's
+  reading of a pattern, in `filter.rs`, with unit tests.  `--delete`
+  runs on the receiver at Finish, from the set of every path the sender
+  listed (a HashSet, 50 to 100 MB for a million), over each directory
+  the sender listed, after the last rename and before the directory
+  stamps.  Finish carries the sender's warning count: with any, nothing
+  is deleted, as rsync does on an I/O error.  Listing lines for deletes
+  travel as Report messages to the sender, which prints them.
+- No permissions, owner, or group.  Nanosecond mtimes,
   compared to the nanosecond (second-only comparison skipped a file
   changed within the second it was made).
 
