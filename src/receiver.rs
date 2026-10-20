@@ -63,6 +63,10 @@ struct Open {
     size: u64,
     mtime_s: i64,
     mtime_ns: u32,
+    /// The destination already has the size and time: if no data comes
+    /// either, it is left exactly as it was.
+    same: bool,
+    touched: bool,
 }
 
 /// Where warnings go.
@@ -220,7 +224,10 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                 shared.ecv.notify_all();
             }
             Msg::Data { id, offset, data } => {
-                let file = shared.open.lock().unwrap().get(&id).and_then(|o| o.file.clone());
+                let file = shared.open.lock().unwrap().get_mut(&id).and_then(|o| {
+                    o.touched = true;
+                    o.file.clone()
+                });
                 if let Some(file) = file {
                     let t = Instant::now();
                     let wrote = file.write_all_at(&data, offset);
@@ -307,8 +314,10 @@ fn finish_file(shared: &Shared, o: Open) {
     }
     let Some(file) = o.file else { return };
     let outcome = (|| -> io::Result<()> {
-        file.set_len(o.size)?;
-        fsutil::set_mtime_fd(&file, o.mtime_s, o.mtime_ns)?;
+        if o.touched || !o.same {
+            file.set_len(o.size)?;
+            fsutil::set_mtime_fd(&file, o.mtime_s, o.mtime_ns)?;
+        }
         drop(file);
         if let Some(tmp) = &o.tmp {
             fs::rename(tmp, &o.path)?;
@@ -450,7 +459,7 @@ fn queue_file(shared: &Arc<Shared>, pool: &Arc<Pool>, id: u32, ent: Ent, trace: 
             open = shared.ocv.wait_timeout(open, TICK).unwrap().0;
         }
         trace.add("waiting for a slot", t);
-        open.insert(id, Open { file: None, path, tmp: None, size: ent.size, mtime_s: ent.mtime_s, mtime_ns: ent.mtime_ns });
+        open.insert(id, Open { file: None, path, tmp: None, size: ent.size, mtime_s: ent.mtime_s, mtime_ns: ent.mtime_ns, same: false, touched: false });
     }
     let shared = shared.clone();
     let pool = pool.clone();
@@ -479,11 +488,12 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
             // The same size and time: ours was set to the nanosecond, so
             // the nanoseconds count too, unless this file system keeps none.
             let same_time = m.mtime() == ent.mtime_s && (m.mtime_nsec() as u32 == ent.mtime_ns || m.mtime_nsec() == 0);
-            if !shared.opts.checksum && m.len() == ent.size && same_time {
+            let same = m.len() == ent.size && same_time;
+            if !shared.opts.checksum && same {
                 release(shared, id);
                 return (DEC_SKIP, 0);
             }
-            Some(m)
+            Some((m, same))
         }
         Ok(_) => {
             if commit {
@@ -498,11 +508,11 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
         Err(_) => None,
     };
     let opened = match existing {
-        Some(m) => match OpenOptions::new().read(true).write(commit).open(&path) {
+        Some((m, same)) => match OpenOptions::new().read(true).write(commit).open(&path) {
             Ok(f) => {
                 let file = Arc::new(f);
                 queue_hashes(shared, pool, id, file.clone(), m.len().min(ent.size));
-                (file, None, DEC_DELTA, m.len())
+                (file, None, DEC_DELTA, m.len(), same)
             }
             Err(e) => {
                 shared.sink.warn(format!("{}: cannot open: {e}", path.display()));
@@ -516,7 +526,7 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
             }
             let tmp = tmp_name(&path);
             match OpenOptions::new().write(true).create(true).truncate(true).mode(ent.mode | 0o600).open(&tmp) {
-                Ok(f) => (Arc::new(f), Some(tmp), DEC_WHOLE, 0),
+                Ok(f) => (Arc::new(f), Some(tmp), DEC_WHOLE, 0, false),
                 Err(e) => {
                     shared.sink.warn(format!("{}: cannot create: {e}", path.display()));
                     release(shared, id);
@@ -525,10 +535,11 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
             }
         }
     };
-    let (file, tmp, kind, dest_size) = opened;
+    let (file, tmp, kind, dest_size, same) = opened;
     if let Some(o) = shared.open.lock().unwrap().get_mut(&id) {
         o.file = Some(file);
         o.tmp = tmp;
+        o.same = same;
     }
     (kind, dest_size)
 }

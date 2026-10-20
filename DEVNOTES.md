@@ -59,6 +59,12 @@ done and what was found.
   reach the sender in roughly, not exactly, scan order, and so does
   the listing.  Directories and links are still made in order, by the
   decider, before the files in them are handed out.
+- A file the receiver opened for a delta but received nothing for,
+  whose size and time already matched, is closed as it was: no
+  truncate, no stamp.  Re-stamping 104k inodes on a `-c` pass cost
+  nothing in that pass but left the receiver writing back metadata
+  for seconds, and any pass over the tree in that time took a second
+  longer (0.8 s became 1.9).
 - No permissions, owner, group, or `--delete`.  Nanosecond mtimes,
   compared to the nanosecond (second-only comparison skipped a file
   changed within the second it was made).
@@ -121,13 +127,31 @@ A directory's own size (the `%s` of `find` on it) differs between
 trees filled serially and in parallel; the tree fingerprint leaves it
 out.
 
+The per-file cost of the passes that send nothing, hot, 105k entries:
+the unchanged pass is 0.37 to 0.46 s, of which ssh startup is 0.11 and
+the scan 0.03, so the exchange of 105k entries and 105k decisions costs
+about 2 µs an entry on each side (local to local on a socket pair:
+0.19 s in all).  Nothing in it dominates: each entry is one message of
+eight reads on a buffered reader and two allocations, a mutex and a
+condvar wake into the decider, a boxed job for the file pool (the stat
+is 5.6 µs there; on the decider alone it would be 0.58 s), and one
+decision message back.  Batching entries and decisions into messages
+of a few hundred would take out most of it, for 0.1 s at best; rsync
+takes 0.64 s for the same pass.  The `-c` pass is 0.6 to 0.9 s: the
+receiver's pool spends 8 µs a file opening and queueing the hash and
+2 µs closing, the sender's comparer 2.3 µs a result, and the window of
+1,024 is full the whole time (the decider waits for a slot 0.4 of 0.5
+s), so it is bound by the round trip through open, hash, compare,
+FileDone and close rather than by any one thread.
+
 ## Not yet done
 
-- Trees of many small files: a new tree now goes at the wire, but the
-  per-file cost of an unchanged tree (0.37 s for 103k entries, hot) and
-  of `-c` on one (0.88 s) has not been looked at.  Two sources with the
-  same relative path in both now race on the receiver's file pool
-  where the later one used to win.
+- Trees of many small files: a new tree goes at the wire; the passes
+  that send nothing are about 2 µs an entry a side in protocol work
+  (see the findings), which batching entries and decisions could cut
+  by perhaps 0.1 s on 100k files.  Two sources with the same relative
+  path in both now race on the receiver's file pool where the later
+  one used to win.
 - Larger-than-RAM images on the receiving side, for a truly cold
   receiver.
 - ssh is the only transport.  At 2.5 GbE one stream carries 275 MB/s
