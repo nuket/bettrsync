@@ -68,8 +68,10 @@ back over ssh's stderr).
 
 ## How it works
 
-The sender scans the sources with several threads and sends the list.
-The receiver walks it in order, making directories and links, and
+The sender scans the sources with several threads and sends the
+entries as it finds them, a directory at a time, each directory before
+its contents.  The receiver walks them in order, making directories and
+links, and
 hands each file to a small pool that looks at the destination and
 answers: skip, send whole, or update in place.  For an update it opens
 the file and queues its blocks for hashing on a thread pool; each
@@ -95,7 +97,10 @@ hundred messages each way rather than a hundred thousand.
 there, so no Rust toolchain is needed on the build machine and the
 binary runs on any glibc from 2.31 up; otherwise it runs `cargo build`.
 `tests/smoke.sh BIN SCRATCHDIR` checks a tree with links and times, an
-image changed in place, shrunk and grown.  `bench/bench.sh BIN USER@HOST
+image changed in place, shrunk and grown, the remote code path through
+a stand-in for ssh, a tree of thousands of files changed every way at
+once with unreadable files and type changes, and `-c`; the debug build
+asserts the protocol's invariants, so run it on that too.  `bench/bench.sh BIN USER@HOST
 SCRATCHDIR [GIB] [CHANGES]` times `rsync --inplace` against bettrsync
 on a changed image over ssh, page caches cold and hot on both sides,
 verifying the copies after every write.  `bench/tree.sh BIN USER@HOST

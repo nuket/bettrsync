@@ -237,6 +237,7 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
         match msg {
             Msg::Entries(entries) => {
                 let mut e = shared.entries.lock().unwrap();
+                debug_assert!(!e.1, "entries after EntriesDone");
                 for w in entries {
                     let ent = Ent { kind: w.kind, rel: w.path, size: w.size, mode: w.mode, mtime_s: w.mtime_s, mtime_ns: w.mtime_ns, target: w.target };
                     e.0.push_back((w.id, ent));
@@ -253,6 +254,7 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                     o.touched = true;
                     o.file.clone()
                 });
+                debug_assert!(file.is_some(), "data for file {id}, which is not open");
                 if let Some(file) = file {
                     let t = Instant::now();
                     let wrote = file.write_all_at(&data, offset);
@@ -266,6 +268,7 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                 }
             }
             Msg::FileDone { id } => {
+                debug_assert!(finished.is_none(), "FileDone for {id} after Finish");
                 let open = shared.open.lock().unwrap().remove(&id);
                 shared.ocv.notify_all();
                 if let Some(o) = open {
@@ -284,6 +287,7 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                 }
             }
             Msg::FileAbort { id } => {
+                debug_assert!(finished.is_none(), "FileAbort for {id} after Finish");
                 let open = shared.open.lock().unwrap().remove(&id);
                 shared.ocv.notify_all();
                 if let Some(o) = open {
@@ -303,6 +307,8 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                     }
                 }
                 shared.ftrace.report();
+                debug_assert!(shared.open.lock().unwrap().is_empty(), "files still open at Finish: a slot was not given back");
+                debug_assert!(shared.entries.lock().unwrap().1, "Finish before EntriesDone");
                 if shared.opts.commit {
                     for (path, s, ns) in shared.dirs.lock().unwrap().iter().rev() {
                         let same = fs::symlink_metadata(path).map(|m| m.mtime() == *s && m.mtime_nsec() as u32 == *ns).unwrap_or(true);

@@ -1,6 +1,8 @@
 //! The source tree, walked by several threads at once: every directory,
 //! regular file and symlink under the sources, with the path each has
-//! under the destination.
+//! under the destination.  The entries are handed out a directory at a
+//! time as the walk goes, sorted within the directory, and a directory
+//! is always handed out before anything in it.
 
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -29,12 +31,15 @@ pub struct Entry {
     pub target: Vec<u8>,
 }
 
-struct Walk {
+/// Takes a directory's worth of entries, and any warnings, as the walk
+/// finds them.
+pub type Emit<'a> = &'a (dyn Fn(Vec<Entry>, Vec<String>) + Sync);
+
+struct Walk<'a> {
     // Directories still to read, and how many are being read right now.
     queue: Mutex<(Vec<(PathBuf, Vec<u8>)>, usize)>,
     cv: Condvar,
-    entries: Mutex<Vec<Entry>>,
-    warnings: Mutex<Vec<String>>,
+    emit: Emit<'a>,
 }
 
 fn entry_of(rel: Vec<u8>, abs: PathBuf, meta: &std::fs::Metadata, kind: u8, target: Vec<u8>) -> Entry {
@@ -72,17 +77,12 @@ fn classify(rel: Vec<u8>, abs: PathBuf, meta: &std::fs::Metadata, warnings: &mut
     }
 }
 
-pub fn scan(sources: &[Source], threads: usize) -> (Vec<Entry>, Vec<String>) {
-    let walk = Walk {
-        queue: Mutex::new((Vec::new(), 0)),
-        cv: Condvar::new(),
-        entries: Mutex::new(Vec::new()),
-        warnings: Mutex::new(Vec::new()),
-    };
+pub fn scan(sources: &[Source], threads: usize, emit: Emit) {
+    let walk = Walk { queue: Mutex::new((Vec::new(), 0)), cv: Condvar::new(), emit };
     {
         let mut queue = walk.queue.lock().unwrap();
-        let mut entries = walk.entries.lock().unwrap();
-        let mut warnings = walk.warnings.lock().unwrap();
+        let mut entries = Vec::new();
+        let mut warnings = Vec::new();
         for s in sources {
             let meta = match std::fs::symlink_metadata(&s.path) {
                 Ok(m) => m,
@@ -109,26 +109,14 @@ pub fn scan(sources: &[Source], threads: usize) -> (Vec<Entry>, Vec<String>) {
                 entries.push(entry);
             }
         }
+        // The sources themselves go out before any directory is read.
+        (walk.emit)(entries, warnings);
     }
     thread::scope(|sc| {
         for _ in 0..threads.max(1) {
             sc.spawn(|| worker(&walk));
         }
     });
-    let mut entries = walk.entries.into_inner().unwrap();
-    let mut warnings = walk.warnings.into_inner().unwrap();
-    entries.sort_by(|a, b| a.rel.cmp(&b.rel));
-    entries.dedup_by(|b, a| {
-        if a.rel == b.rel {
-            if !a.rel.is_empty() {
-                warnings.push(format!("{}: the same destination path as {}, skipped", b.abs.display(), a.abs.display()));
-            }
-            true
-        } else {
-            false
-        }
-    });
-    (entries, warnings)
 }
 
 fn worker(w: &Walk) {
@@ -189,11 +177,11 @@ fn read_dir(w: &Walk, dir: &Path, rel: &[u8]) {
         }
         Err(e) => warnings.push(format!("{}: {e}", dir.display())),
     }
-    if !found.is_empty() {
-        w.entries.lock().unwrap().extend(found);
-    }
-    if !warnings.is_empty() {
-        w.warnings.lock().unwrap().extend(warnings);
+    // Handed out before the directories in it are queued, so that
+    // whoever reads them finds their parent already sent.
+    if !found.is_empty() || !warnings.is_empty() {
+        found.sort_by(|a, b| a.rel.cmp(&b.rel));
+        (w.emit)(found, warnings);
     }
     if !dirs.is_empty() {
         w.queue.lock().unwrap().0.extend(dirs);

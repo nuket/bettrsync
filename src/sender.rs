@@ -3,17 +3,19 @@
 //! receiver hashes its copy, sends only the blocks that differ, and
 //! reports what was done and how long each part took.
 //!
-//! Threads: the reader takes the receiver's decisions and hashes off the
-//! wire; the pool reads and hashes the source in chunks; the comparer
-//! takes each chunk, waits for the receiver's hashes of the same blocks,
-//! and queues the differing ones for the writer, which puts everything on
-//! the wire.  The main thread feeds the pool, in the order the receiver
-//! decides, up to `max_open` files at a time.
+//! Threads: the lister scans the sources and sends the entries as they
+//! are found; the reader takes the receiver's decisions and hashes off
+//! the wire; the pool reads and hashes the source in chunks; the
+//! comparer takes each chunk, waits for the receiver's hashes of the
+//! same blocks, and queues the differing ones for the writer, which puts
+//! everything on the wire.  The main thread feeds the pool, in the order
+//! the receiver decides, up to `max_open` files at a time, from the
+//! moment the first decision comes.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -102,6 +104,24 @@ struct Shared {
     new_files: AtomicU64,
     failed: AtomicU64,
     pool_trace: crate::trace::Trace,
+    // What the scan has found so far; the main thread takes each entry
+    // when its decision comes.
+    list: Mutex<List>,
+    emitted: AtomicUsize,
+    scan_done: AtomicBool,
+    t_scan: Mutex<Option<Instant>>,
+}
+
+#[derive(Default)]
+struct List {
+    entries: Vec<Option<Entry>>,
+    // Destination paths seen: a second entry for one is skipped.
+    seen: HashSet<Vec<u8>>,
+    pending: Vec<WireEntry>,
+    dirs: u64,
+    files: u64,
+    links: u64,
+    bytes: u64,
 }
 
 /// A chunk read and (for a delta) hashed by the pool.
@@ -179,26 +199,11 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         new_files: AtomicU64::new(0),
         failed: AtomicU64::new(0),
         pool_trace: crate::trace::Trace::new("sender pool"),
+        list: Mutex::new(List::default()),
+        emitted: AtomicUsize::new(0),
+        scan_done: AtomicBool::new(false),
+        t_scan: Mutex::new(None),
     });
-
-    // The scan.
-    let (entries, warnings) = scan::scan(&shared.opts.sources, shared.opts.threads);
-    for text in warnings {
-        shared.warnings.fetch_add(1, Ordering::Relaxed);
-        shared.sink.warn(text);
-    }
-    let t_scan = Instant::now();
-    let (mut n_dirs, mut n_files, mut n_links, mut total) = (0u64, 0u64, 0u64, 0u64);
-    for e in &entries {
-        match e.kind {
-            KIND_DIR => n_dirs += 1,
-            KIND_LINK => n_links += 1,
-            _ => {
-                n_files += 1;
-                total += e.size;
-            }
-        }
-    }
 
     let reader = {
         let shared = shared.clone();
@@ -209,24 +214,66 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         })
     };
 
-    for (first, batch) in entries.chunks(BATCH).enumerate().map(|(i, b)| (i * BATCH, b)) {
-        let batch = batch
-            .iter()
-            .enumerate()
-            .map(|(i, e)| WireEntry {
-                id: (first + i) as u32,
-                kind: e.kind,
-                path: e.rel.clone(),
-                size: e.size,
-                mode: e.mode,
-                mtime_s: e.mtime_s,
-                mtime_ns: e.mtime_ns,
-                target: e.target.clone(),
-            })
-            .collect();
-        tx.send(Msg::Entries(batch)).map_err(|_| gone())?;
-    }
-    tx.send(Msg::EntriesDone).map_err(|_| gone())?;
+    // The lister: the scan, sent in batches as it goes.  The list is
+    // held while a batch goes out, so batches reach the wire in the
+    // order the walk made them: a directory before its contents.
+    let lister = {
+        let shared = shared.clone();
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let emit = |found: Vec<Entry>, warnings: Vec<String>| {
+                for text in warnings {
+                    shared.warnings.fetch_add(1, Ordering::Relaxed);
+                    shared.sink.warn(text);
+                }
+                let mut list = shared.list.lock().unwrap();
+                for e in found {
+                    if !list.seen.insert(e.rel.clone()) {
+                        if !e.rel.is_empty() {
+                            shared.warnings.fetch_add(1, Ordering::Relaxed);
+                            shared.sink.warn(format!("{}: the same destination path as an earlier source, skipped", e.abs.display()));
+                        }
+                        continue;
+                    }
+                    match e.kind {
+                        KIND_DIR => list.dirs += 1,
+                        KIND_LINK => list.links += 1,
+                        _ => {
+                            list.files += 1;
+                            list.bytes += e.size;
+                        }
+                    }
+                    let id = list.entries.len() as u32;
+                    list.pending.push(WireEntry {
+                        id,
+                        kind: e.kind,
+                        path: e.rel.clone(),
+                        size: e.size,
+                        mode: e.mode,
+                        mtime_s: e.mtime_s,
+                        mtime_ns: e.mtime_ns,
+                        target: e.target.clone(),
+                    });
+                    list.entries.push(Some(e));
+                    shared.emitted.fetch_add(1, Ordering::Release);
+                    if list.pending.len() >= BATCH && !shared.dead.load(Ordering::Relaxed) {
+                        let batch = std::mem::take(&mut list.pending);
+                        if tx.send(Msg::Entries(batch)).is_err() {
+                            shared.dead.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
+            };
+            scan::scan(&shared.opts.sources, shared.opts.threads, &emit);
+            let rest = std::mem::take(&mut shared.list.lock().unwrap().pending);
+            let sent = (rest.is_empty() || tx.send(Msg::Entries(rest)).is_ok()) && tx.send(Msg::EntriesDone).is_ok();
+            if !sent {
+                shared.dead.store(true, Ordering::Relaxed);
+            }
+            *shared.t_scan.lock().unwrap() = Some(Instant::now());
+            shared.scan_done.store(true, Ordering::Release);
+        })
+    };
 
     let (res_tx, res_rx) = mpsc::sync_channel::<Res>(shared.opts.threads.max(1) * 2);
     let comparer = {
@@ -237,21 +284,32 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
 
     let mut new_dirs = 0u64;
     let mut new_links = 0u64;
+    let mut decided = 0usize;
     let outcome = (|| -> io::Result<()> {
-        for _ in 0..entries.len() {
-            let (id, kind, dest_size) = {
+        loop {
+            // The next decision, or the end: the scan is done and every
+            // entry it sent has been answered.
+            let next = {
                 let mut d = shared.decisions.lock().unwrap();
                 loop {
                     if let Some(x) = d.pop_front() {
-                        break x;
+                        break Some(x);
                     }
                     if shared.dead.load(Ordering::Relaxed) {
                         return Err(gone());
                     }
+                    if shared.scan_done.load(Ordering::Acquire) && decided == shared.emitted.load(Ordering::Acquire) {
+                        break None;
+                    }
                     d = shared.dcv.wait_timeout(d, TICK).unwrap().0;
                 }
             };
-            let e = &entries[id as usize];
+            let Some((id, kind, dest_size)) = next else { break };
+            decided += 1;
+            let e = shared.list.lock().unwrap().entries.get_mut(id as usize).and_then(|e| e.take());
+            debug_assert!(e.is_some(), "a decision for {id}, which was never sent or was decided before");
+            let Some(e) = e else { continue };
+            let e = &e;
             let name = if e.rel.is_empty() { ".".into() } else { String::from_utf8_lossy(&e.rel) };
             match (e.kind, kind) {
                 (_, DEC_FAIL) => {
@@ -281,12 +339,14 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
                 i = shared.icv.wait_timeout(i, TICK).unwrap().0;
             }
         }
+        debug_assert!(shared.inflight.lock().unwrap().is_empty(), "files in flight at Finish");
         tx.send(Msg::Finish).map_err(|_| gone())?;
         Ok(())
     })();
     drop(pool);
     drop(res_tx);
     let _ = comparer.join();
+    let _ = lister.join();
     shared.pool_trace.report();
     outcome?;
 
@@ -306,6 +366,11 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         }
     };
     let t_end = Instant::now();
+    let t_scan = shared.t_scan.lock().unwrap().unwrap_or(t_end);
+    let (n_entries, n_dirs, n_files, n_links, total) = {
+        let l = shared.list.lock().unwrap();
+        (l.entries.len() as u64, l.dirs, l.files, l.links, l.bytes)
+    };
 
     // The report.
     let s = &shared;
@@ -318,7 +383,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
     s.sink.say(format!(
         "scanned   {:6.2} s   {} entries: {} dirs, {} files ({}), {} links",
         (t_scan - t0).as_secs_f64(),
-        commas(entries.len() as u64),
+        commas(n_entries),
         commas(n_dirs),
         commas(n_files),
         human(total),

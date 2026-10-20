@@ -19,14 +19,27 @@ done and what was found.
   present (so the binary runs on glibc 2.31 up), else with the local
   cargo.  `BETTRSYNC_GIT_REVISION` stamps `--version`.
 - `tests/smoke.sh BIN SCRATCHDIR` is the regression test; run it after
-  every change.  It needs a few hundred MB of scratch.
+  every change, on the release build and on `build.sh --debug`'s,
+  which has the debug assertions on the protocol's invariants (data
+  only for an open file, no FileDone after Finish, every slot given
+  back by Finish, one decision an entry, nothing in flight at Finish).
+  It needs a few hundred MB of scratch.  `tests/fakessh.sh` stands in
+  for ssh there, so the server mode, pipes and relayed stderr run in
+  every test run without a network.
 - `bench/bench.sh BIN USER@HOST SCRATCHDIR [GIB] [CHANGES]` is the
   benchmark against `rsync --inplace`; the cold runs need
   `sudo -n tee /proc/sys/vm/drop_caches` without a password on both
-  machines (a sudoers.d line), else only the image's pages are evicted.
-  `bench/tree.sh BIN USER@HOST SCRATCHDIR [FILES] [CHANGES]` is the
+  machines, else only the image's pages are evicted.  The rule, one
+  line in `/etc/sudoers.d/drop-caches` (mode 440, checked with
+  `visudo -cf`), for the account that runs or receives the bench:
+
+      max ALL=(root) NOPASSWD: /usr/bin/tee /proc/sys/vm/drop_caches
+
+  sudoers matches the arguments exactly, so it allows nothing but that
+  one write.  Both bench machines have it.
+- `bench/tree.sh BIN USER@HOST SCRATCHDIR [FILES] [CHANGES]` is the
   same for a tree of many small files, against `rsync -rlt`.  Both
-  take `BENCH_SSH` and `BENCH_REMOTE_BIN`.
+  benches take `BENCH_SSH` and `BENCH_REMOTE_BIN`.
 - `BETTRSYNC_TRACE=1` makes every thread print where its time went,
   on both sides; put it in `--remote-bin "BETTRSYNC_TRACE=1 bettrsync"`
   for the far side.  Read the "sender pool reading" figure first when a
@@ -35,6 +48,15 @@ done and what was found.
 
 ## Design decisions
 
+- The scan streams: the lister thread sends entries a directory at a
+  time as the walk finds them, a directory always before its contents,
+  and the main thread feeds files from the first decision on.  The
+  list is no longer sorted as a whole (within a directory it is), so
+  the listing comes out in walk order, and two sources with the same
+  destination path are resolved first come, with a warning, instead of
+  first in sort order.  On NVMe with a hot cache the scan is 0.03 s and
+  this is worth 0.04 s; it is for the cold spinning disk with a million
+  files, where the receiver used to idle through the whole scan.
 - Fixed-offset blocks, not rsync's rolling checksum: the files that
   matter are VM disk images, which change in place.  Both sides hash
   the same offsets at once; nothing is found that has shifted.
@@ -166,10 +188,18 @@ the scan is 0.18 s, in which the file pool's stats take 0.58 thread-
 seconds of the 1.6 available and both readers wait on each other: the
 pipeline, not a thread.
 
+Streaming the scan, same tree, alternated three times: unchanged cold
+0.44 s became 0.40, hot 0.31 to 0.33 became 0.26 to 0.31.  The window
+for `-c` at 1,024, 2,048 and 4,096, three rounds each: 0.55 to 0.58,
+0.53 to 0.58, 0.49 to 0.59, so nothing to choose, and it stays 1,024.
+The ssh connection is made once a run, whatever the tree: the 0.11 s
+is one key exchange and login, and ControlMaster in the user's ssh
+config would make it about 10 ms.
+
 ## Not yet done
 
-- Two sources with the same relative path in both race on the
-  receiver's file pool where the later one used to win.
+- Larger-than-RAM trees on the sender: the list of entries is kept in
+  memory until each is decided (a few hundred bytes each).
 - Larger-than-RAM images on the receiving side, for a truly cold
   receiver.
 - ssh is the only transport.  At 2.5 GbE one stream carries 275 MB/s
