@@ -62,11 +62,35 @@ from 2.0 GB/s to ~230 MB/s (VirtualBox's USB and disk emulation
 contend), so disk and network could not overlap there.  Its 5.4 GiB
 of RAM never kept a 4 GiB image cached.
 
+## Findings on bare metal (2026-10-20, two systems at 2.5 GbE)
+
+The sender is a 32-thread box with 30 GiB; the receiver (Wonderslice,
+claude@192.168.178.170, id_testkey) has 16 cores and 58 GiB.  Both
+drop the whole page cache before a cold run (sudoers on both).  The
+link: iperf3 2.35 Gbit/s, one ssh stream 275 MB/s either way, the same
+with aes128-gcm, so at this speed ssh is wire-bound, not cipher-bound.
+
+4 GiB image, 200 changed spots: rsync --inplace 6.0 s cold / 3.3 hot;
+bettrsync --commit 1.5 / 1.1; dry run 1.1 / 0.68; -c on an unchanged
+hot file 0.67; unchanged 0.12.  Whole-file copy 277 MiB/s, push and
+pull alike, which is the ssh ceiling.  Hot compares hash both 4 GiB
+copies at 14 GiB/s aggregate, cold at 6 to 9 GiB/s, so the delta runs
+are bound by reading the file on each side; the wire is idle most of
+the time.  Evicting only the image's pages (dd iflag=nocache) gave the
+same cold numbers as dropping the whole cache, within 0.1 s.
+
+A rough view of where the time goes now: rsync's hot 3.3 s is its
+single-threaded rolling checksum over 4 GiB; bettrsync's hot 1.1 s is
+the scan (0.11 s, mostly ssh startup) plus a read of both copies in
+parallel, with the 70 to 90 MiB of changed blocks going over while
+hashing continues.
+
 ## Not yet done
 
 - Trees of many small files have not been benchmarked; the per-file
   protocol cost is untested at scale.
 - Larger-than-RAM images on the receiving side, for a truly cold
   receiver.
-- ssh is the only transport; at 2.5 Gbps and up one ssh stream's
-  cipher may become the limit.  Measure before building anything.
+- ssh is the only transport.  At 2.5 GbE one stream carries 275 MB/s
+  of a 294 MB/s wire, cipher choice makes no difference, so it is not
+  the limit there; at 10 GbE it will be.  Measure before building.
