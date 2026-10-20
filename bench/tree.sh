@@ -43,9 +43,12 @@ cold() {
     remote "sync; echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || echo '(no sudo there: cache not dropped)'"
 }
 
+# Writes from the last round are flushed first: a hundred thousand new
+# inodes writing back in the background slow the next pass by a second.
 hot() {
+    sync
     (cd "$T" && find . -type f -exec cat {} + >/dev/null) &
-    remote "cd $RT 2>/dev/null && find . -type f -exec cat {} + >/dev/null; true"
+    remote "sync; cd $RT 2>/dev/null && find . -type f -exec cat {} + >/dev/null; true"
     wait
 }
 

@@ -130,16 +130,21 @@ either way, so the whole-file copy is at the ssh ceiling:
 Pulling works at the same rate: the 4 GiB file came back at 277 MiB/s,
 and `-c` on an unchanged hot copy compared both sides in 0.64 s.
 
-A tree of 102,000 files of 512 B to 16 KiB in 211 directories with
-1,000 links, 820 MiB, on the same two systems; a round changes 1,000
-files and adds 500:
+A tree of 108,000 files of 512 B to 16 KiB in 211 directories with
+1,000 links, 867 MiB, on the same two systems; a round changes 1,000
+files and adds 500.  The receiver runs a few VMs, so these move by a
+few tenths from run to run:
 
-    rsync new tree, cold                   5.82 s
-    bettrsync new tree, cold               3.57 s   (at 252 MiB/s, the wire)
-    rsync, unchanged, hot                  0.64 s
-    bettrsync, unchanged, hot              0.37 s
-    bettrsync -c, unchanged, hot           0.88 s
-    rsync, 1500 changed, cold              1.09 s
-    rsync, 1500 changed, hot               0.53 s
-    bettrsync, 1500 changed, cold          0.58 s
-    bettrsync, 1500 changed, hot           0.31 s
+    rsync new tree, cold                   6.75 s
+    bettrsync new tree, cold               3.62 s   (at 252 MiB/s, the wire)
+    rsync, unchanged, hot                  0.63 s
+    bettrsync, unchanged, hot              0.39 s
+    bettrsync -c, unchanged, hot           0.80 s
+    rsync, 1500 changed, cold              1.21 s
+    rsync, 1500 changed, hot               0.50 s
+    bettrsync, 1500 changed, cold          0.66 s
+    bettrsync, 1500 changed, hot           0.55 s
+
+The unchanged pass is 0.11 s of ssh startup, 0.03 s of scanning, and
+about 2 µs an entry on each side for the exchange; `-c` on an unchanged
+tree hashes every file on both sides without touching any of them.

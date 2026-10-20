@@ -544,6 +544,9 @@ fn compare_loop(shared: &Arc<Shared>, rx: mpsc::Receiver<Res>) {
         }
         shared.changed_blocks.fetch_add(changed, Ordering::Relaxed);
         shared.sent_bytes.fetch_add(bytes, Ordering::Relaxed);
+        // The file stays in flight until its FileDone is on the channel:
+        // the main thread sends Finish once nothing is in flight, and
+        // Finish must follow every FileDone.
         let done = {
             let mut inflight = shared.inflight.lock().unwrap();
             let Some(p) = inflight.get_mut(&res.id) else { continue };
@@ -552,7 +555,7 @@ fn compare_loop(shared: &Arc<Shared>, rx: mpsc::Receiver<Res>) {
             p.failed |= failed;
             p.chunks_left -= 1;
             if p.chunks_left == 0 {
-                inflight.remove(&res.id)
+                Some(Progress { rel: std::mem::take(&mut p.rel), ..*p })
             } else {
                 None
             }
@@ -576,6 +579,7 @@ fn compare_loop(shared: &Arc<Shared>, rx: mpsc::Receiver<Res>) {
                 shared.sink.line(format!("new      {name}  {}", human(p.size)));
                 let _ = shared.sink.tx.send(Msg::FileDone { id: res.id });
             }
+            shared.inflight.lock().unwrap().remove(&res.id);
             shared.icv.notify_all();
         }
     }

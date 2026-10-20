@@ -65,6 +65,11 @@ done and what was found.
   nothing in that pass but left the receiver writing back metadata
   for seconds, and any pass over the tree in that time took a second
   longer (0.8 s became 1.9).
+- The sender keeps a file in flight until its FileDone is on the
+  channel, since Finish goes out once nothing is in flight and the
+  receiver stamps the directories at Finish: a FileDone after it meant
+  one more rename into a directory already stamped.  Seen once, on the
+  last directory of a 106k-file tree, as a 43 s newer mtime.
 - No permissions, owner, group, or `--delete`.  Nanosecond mtimes,
   compared to the nanosecond (second-only comparison skipped a file
   changed within the second it was made).
@@ -87,7 +92,10 @@ of RAM never kept a 4 GiB image cached.
 ## Findings on bare metal (2026-10-20, two systems at 2.5 GbE)
 
 The sender is a 32-thread box with 30 GiB; the receiver (Wonderslice,
-claude@192.168.178.170, id_testkey) has 16 cores and 58 GiB.  Both
+claude@192.168.178.170, id_testkey) has 16 cores and 58 GiB, and runs
+VirtualBox VMs that take about two cores between them, which is why
+its small-file figures wander by a few tenths of a second from run to
+run.  Both
 drop the whole page cache before a cold run (sudoers on both).  The
 link: iperf3 2.35 Gbit/s, one ssh stream 275 MB/s either way, the same
 with aes128-gcm, so at this speed ssh is wire-bound, not cipher-bound.
