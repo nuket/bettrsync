@@ -104,3 +104,22 @@ On a 4 GiB image with 200 changed spots, over a 1 Gbps link from a
     bettrsync dry run, hot                 1.58 s
     bettrsync --commit, cold               3.84 s
     bettrsync --commit, hot                1.94 s
+
+The same image and changes between two systems at 2.5 GbE, with the
+whole page cache dropped on both sides before each cold run.  iperf3
+measures the link at 2.35 Gbit/s and one ssh stream carries 275 MB/s
+either way, so the whole-file copy is at the ssh ceiling:
+
+    bettrsync new file, cold              14.90 s   (4 GiB at 277 MiB/s)
+    rsync --inplace, cold                  6.02 s
+    rsync --inplace, hot                   3.28 s
+    bettrsync dry run, cold                1.07 s
+    bettrsync dry run, hot                 0.68 s
+    bettrsync --commit, cold               1.47 s
+    bettrsync --commit, hot                1.12 s
+    rsync, unchanged, hot                  0.16 s
+    bettrsync, unchanged, hot              0.12 s
+    bettrsync -c, unchanged, hot           0.67 s
+
+Pulling works at the same rate: the 4 GiB file came back at 277 MiB/s,
+and `-c` on an unchanged hot copy compared both sides in 0.64 s.
