@@ -525,8 +525,12 @@ fn feed_file(shared: &Arc<Shared>, pool: &Pool, res_tx: &mpsc::SyncSender<Res>, 
         shared.hashed_bytes.fetch_add(e.size, Ordering::Relaxed);
     }
     if chunks.is_empty() {
-        // An empty file: the receiver truncates and stamps it.
-        if delta {
+        // An empty file: the receiver truncates and stamps it.  One that
+        // is empty there already is unchanged, as a file with no
+        // differing block is, whatever its time.
+        if delta && dest_size == 0 {
+            shared.unchanged.fetch_add(1, Ordering::Relaxed);
+        } else if delta {
             shared.updated.fetch_add(1, Ordering::Relaxed);
             shared.sink.line(format!("update   {name}  0 of 0 blocks"));
         } else {

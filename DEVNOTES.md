@@ -44,6 +44,34 @@ done and what was found.
   on both sides; put it in `--remote-bin "BETTRSYNC_TRACE=1 bettrsync"`
   for the far side.  Read the "sender pool reading" figure first when a
   run is slow: it tells disk from everything else.
+- Windows: `python3 ../Shove/systems-build.py -f systems.yaml build
+  dev-windows-10` syncs the tree (a tar over ssh) to
+  `%USERPROFILE%\devsrc\bettrsync` on the Windows 10 dev VM
+  (192.168.56.111, user max, id_testkey, cmd as the ssh shell, cargo
+  1.98 MSVC on the PATH, Python 3.13) and runs `build.bat`, the target
+  `bettrsync-windows`, fetching `bettrsync.exe` into `artifacts/`.
+  `tests/smoke.py BIN SCRATCHDIR` is the smoke test that runs there
+  (and on Linux), `tests/fakessh.py` its ssh stand-in through cmd.
+  The ssh sessions on the Windows VMs are not elevated, so no symlink
+  can be made in them: the smoke test skips its link checks and a
+  link sent there is a warning.  test-windows-11 (192.168.56.133, no
+  Python, only the Store stub) and test-ubuntu-2604 (192.168.56.122)
+  are the far ends of the cross-platform runs; both Windows VMs and
+  dev-ubuntu-2604 have id_testkey in their `.ssh` too, so each can be
+  the client against the Linux VMs.  Run both smoke tests, both
+  builds, on both platforms after a change that touches `fsutil.rs`.
+  A run with Windows as the client (bettrsync.exe spawning ssh.exe)
+  cannot be driven over ssh: Windows' ssh.exe, started inside an sshd
+  session with no console, never forwards a piped stdin, so the
+  handshake deadlocks (`echo x | ssh host cat` hangs there too).  In
+  the desktop session it works, so those runs go through
+  `systems-deploy.py start dev-windows-10 --as cross <batch file>`,
+  which runs it in the logged-in session with its output in
+  `%USERPROFILE%\bettrsync\cross.log`.
+- As few crates as possible, the cost of each weighed against what it
+  brings: xxhash-rust for the hashes and libc on Unix is the whole
+  list; the Windows side is std with the few Win32 constants it needs
+  written out, rather than windows-sys.
 - Commit to main as each milestone works.
 
 ## Design decisions
@@ -124,6 +152,53 @@ done and what was found.
   nothing is asked of the umask.  Nanosecond mtimes,
   compared to the nanosecond (second-only comparison skipped a file
   changed within the second it was made).
+
+- Windows (2026-10-21).  Everything the platforms do differently is
+  in `fsutil.rs`, behind one set of functions with a `cfg(unix)` and a
+  `cfg(windows)` body each; the rest of the code calls those and knows
+  nothing of either.  Names travel on the wire as bytes, the file
+  system's own on Unix and WTF-8 (UTF-8 for any real name) on Windows,
+  with `/` between the parts; a Linux name that is not UTF-8 gets
+  replacement characters on Windows.  Link targets go over with `/`
+  and come back with `\` on Windows, where a link also has to say
+  whether it leads to a directory, so the target is looked at first.
+  Times: NTFS keeps 100 ns ticks, so a comparison on Windows is to the
+  tick (both sides' nanoseconds divided by 100); a Linux file's time
+  is rounded down there and matches on the next run.  Bits: Windows
+  has the read-only attribute and nothing else, so `mode_of` reads a
+  file as 0o444 or 0o644 and a directory as 0o755, and `wanted_mode`
+  folds the source's mode the same way before the comparison, else a
+  Linux 0o755 would be a chmod every run.  A destination file its
+  owner may not write (0444 on Linux, read-only on Windows) cannot be
+  opened for the in-place update, so `clear_readonly` gives it owner
+  write first and the finish sets the source's bits, on both
+  platforms; on Windows the same clearing goes before a delete.  (The
+  Python smoke test found the Linux case: the shell one never wrote
+  to a 0444 file.)  `--delete` compares names
+  folded to lower case on Windows, since NTFS does not tell `Foo` from
+  `foo` and would otherwise delete what was just written.  Offset
+  reads and writes are `seek_read`/`seek_write`, which take the offset
+  each call, so the threads sharing a `File` do not disturb each
+  other.  The server end takes the standard handles as raw `File`s on
+  both platforms (binary, no line writer in the way); two local paths
+  run over a socket pair on Unix and a pipe each way on Windows.
+  Descriptor limits are not a thing on Windows, so `allow_open_files`
+  grants what is asked.
+- Paths on the command line.  A trailing `/`, and on Windows a
+  trailing `\`, means the contents, as does a name with no base name
+  (`.`, `..`, `C:`, `C:\`).  `[user@]host:path` is remote when the
+  colon comes before any separator, except on Windows a single letter
+  before it, `C:\x` or `c:/x`, which is a drive.  The remote command
+  line is quoted for sh and cmd at once: double quotes, `\"` for a
+  quote inside, a backslash run before a quote or at the end doubled
+  (the MSVC argument rule, which sh's double quotes happen to read the
+  same way), `$` and backtick escaped for sh; on a Windows host those
+  two arrive with their backslash, the one thing the scheme cannot
+  do.  cmd says 9009 for a program it cannot find, as sh says 127;
+  both are read as "not found".  Patterns stay `/`-separated: they
+  match the wire's paths.
+- The Windows binary is built with `crt-static` (`.cargo/config.toml`)
+  so it needs no Visual C++ redistributable on the machine it runs on.
 
 ## Findings so far (2026-10-20, 6-core VM sending to a Ryzen 9 7950X)
 

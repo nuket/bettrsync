@@ -18,10 +18,7 @@ mod sender;
 mod trace;
 
 use std::ffi::{OsStr, OsString};
-use std::io::{self, Read, Write};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::io::FromRawFd;
-use std::os::unix::net::UnixStream;
+use std::io;
 use std::path::PathBuf;
 use std::process::{self, Command, Stdio};
 use std::thread;
@@ -89,7 +86,7 @@ fn usage_error(what: String) -> ! {
 /// starting with # or ; are skipped, as rsync does; - reads stdin.
 fn read_patterns(file: &str) -> io::Result<Vec<String>> {
     let text = if file == "-" { io::read_to_string(io::stdin())? } else { std::fs::read_to_string(file)? };
-    Ok(text.lines().filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with(';')).map(str::to_string).collect())
+    Ok(text.lines().map(|l| l.trim_end_matches('\r')).filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with(';')).map(str::to_string).collect())
 }
 
 fn parse_size(s: &str) -> Option<usize> {
@@ -185,26 +182,62 @@ fn parse_args() -> Opts {
     opts
 }
 
-/// A source as given: the trailing slash, or a name like . or .., asks
+/// A source as given: a trailing separator (/ anywhere, \ too on
+/// Windows), or a name like . or .. or C: that has no base name, asks
 /// for the directory's contents.
 fn source_of(path: &OsStr) -> Source {
-    let bytes = path.as_bytes();
-    let contents = bytes.ends_with(b"/") || PathBuf::from(path).file_name().is_none();
+    let bytes = fsutil::name_bytes(path);
+    let contents = bytes.ends_with(b"/") || (cfg!(windows) && bytes.ends_with(b"\\")) || PathBuf::from(path).file_name().is_none();
     Source { path: PathBuf::from(path), contents }
 }
 
-/// `[user@]host:path`, when the path has a colon before any slash.
+/// `[user@]host:path`, when the path has a colon before any separator.
+/// On Windows a drive letter, C:\dir or C:/dir, is not a host.
 fn remote_of(path: &OsStr) -> Option<(String, Vec<u8>)> {
-    let bytes = path.as_bytes();
+    let bytes = fsutil::name_bytes(path);
     let colon = bytes.iter().position(|b| *b == b':')?;
-    if colon == 0 || bytes[..colon].contains(&b'/') {
+    let host = &bytes[..colon];
+    if colon == 0 || host.contains(&b'/') {
         return None;
     }
-    Some((String::from_utf8_lossy(&bytes[..colon]).into_owned(), bytes[colon + 1..].to_vec()))
+    if cfg!(windows) && (host.contains(&b'\\') || (colon == 1 && bytes[0].is_ascii_alphabetic())) {
+        return None;
+    }
+    Some((String::from_utf8_lossy(host).into_owned(), bytes[colon + 1..].to_vec()))
 }
 
-fn shell_quote(bytes: &[u8]) -> String {
-    format!("'{}'", String::from_utf8_lossy(bytes).replace('\'', "'\\''"))
+/// An argument on the remote shell's command line, whichever shell that
+/// is: sh on Unix, cmd on Windows.  Both take double quotes.  A " inside
+/// is written \", and a run of backslashes before one, or at the end, is
+/// doubled, since that is how a program on Windows reads its command
+/// line and how sh reads a double-quoted string too.  $ and ` are
+/// escaped for sh; a path with those on a Windows host is beyond this.
+fn remote_quote(bytes: &[u8]) -> String {
+    let mut out = String::from("\"");
+    let mut backslashes = 0;
+    for c in String::from_utf8_lossy(bytes).chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.extend(std::iter::repeat('\\').take(2 * backslashes + 1));
+                out.push(c);
+                backslashes = 0;
+            }
+            '$' | '`' => {
+                out.extend(std::iter::repeat('\\').take(backslashes + 1));
+                out.push(c);
+                backslashes = 0;
+            }
+            _ => {
+                out.extend(std::iter::repeat('\\').take(backslashes));
+                out.push(c);
+                backslashes = 0;
+            }
+        }
+    }
+    out.extend(std::iter::repeat('\\').take(2 * backslashes));
+    out.push('"');
+    out
 }
 
 fn remote_command(opts: &Opts, host: &str, send: bool, paths: &[Vec<u8>]) -> Command {
@@ -226,12 +259,12 @@ fn remote_command(opts: &Opts, host: &str, send: bool, paths: &[Vec<u8>]) -> Com
         remote.push("--delete".to_string());
     }
     for pat in &opts.excludes {
-        remote.push(shell_quote(format!("--exclude={pat}").as_bytes()));
+        remote.push(remote_quote(format!("--exclude={pat}").as_bytes()));
     }
     remote.push(format!("--block-size={}", opts.block));
     remote.push(format!("--threads={}", opts.threads));
     remote.push("--".to_string());
-    remote.extend(paths.iter().map(|p| shell_quote(p)));
+    remote.extend(paths.iter().map(|p| remote_quote(p)));
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]).arg(host).arg(remote.join(" "));
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
@@ -245,10 +278,15 @@ fn remote_failed(e: io::Error, status: process::ExitStatus, host: &str, remote_b
     if status.success() {
         return e;
     }
+    // 127 is sh's word for a command not found, 9009 cmd's; cmd given a
+    // path that leads nowhere says so and exits 1, which only the
+    // missing handshake tells from a bettrsync that failed at once.
+    let before_hello = e.kind() == io::ErrorKind::UnexpectedEof;
     let what = match status.code() {
-        Some(127) => format!("{remote_bin} was not found on {host}: install it there, or give its path with --remote-bin"),
+        Some(127) | Some(9009) => format!("{remote_bin} was not found on {host}: install it there, or give its path with --remote-bin"),
         Some(126) => format!("{remote_bin} on {host} could not be run"),
         Some(255) => format!("could not reach {host}: the connection failed"),
+        Some(n) if before_hello => format!("{remote_bin} on {host} ended with status {n} before the handshake: it was not found or could not start; install it there, or give its path with --remote-bin"),
         Some(n) => format!("{remote_bin} on {host} ended with status {n} before the transfer finished: {e}"),
         None => format!("{remote_bin} on {host} was killed before the transfer finished: {e}"),
     };
@@ -269,8 +307,7 @@ fn main() {
 
     // The far end of an ssh connection: the protocol on stdin and stdout.
     if let Some(send) = opts.server {
-        let stdin: Box<dyn Read + Send> = Box::new(unsafe { std::fs::File::from_raw_fd(0) });
-        let stdout: Box<dyn Write + Send> = Box::new(unsafe { std::fs::File::from_raw_fd(1) });
+        let (stdin, stdout) = fsutil::stdio();
         if opts.paths.is_empty() {
             usage_error("the server needs a path".to_string());
         }
@@ -311,8 +348,8 @@ fn main() {
     let clean = if let Some((host, path)) = remote_dest {
         // Sending to a remote receiver.
         let mut child = remote_command(&opts, &host, false, &[path]).spawn().unwrap_or_else(|e| fail(e));
-        let r: Box<dyn Read + Send> = Box::new(child.stdout.take().unwrap());
-        let w: Box<dyn Write + Send> = Box::new(child.stdin.take().unwrap());
+        let r: fsutil::Reader = Box::new(child.stdout.take().unwrap());
+        let w: fsutil::Writer = Box::new(child.stdin.take().unwrap());
         let local_sources = sources.iter().map(|s| source_of(s)).collect();
         let result = sender::run(r, w, sender::SendOpts { sources: local_sources, commit: opts.commit, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, excludes: excludes.clone(), delete: opts.delete, local: true });
         let status = child.wait().unwrap_or_else(|e| fail(e));
@@ -321,20 +358,19 @@ fn main() {
         // Receiving from a remote sender.
         let paths: Vec<Vec<u8>> = remote_sources.iter().flatten().map(|(_, p)| p.clone()).collect();
         let mut child = remote_command(&opts, hosts[0], true, &paths).spawn().unwrap_or_else(|e| fail(e));
-        let r: Box<dyn Read + Send> = Box::new(child.stdout.take().unwrap());
-        let w: Box<dyn Write + Send> = Box::new(child.stdin.take().unwrap());
+        let r: fsutil::Reader = Box::new(child.stdout.take().unwrap());
+        let w: fsutil::Writer = Box::new(child.stdin.take().unwrap());
         let result = receiver::run(r, w, receiver::RecvOpts { dest: PathBuf::from(dest), commit: opts.commit, checksum: opts.checksum, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, excludes: excludes.clone(), delete: opts.delete, local: true });
         let status = child.wait().unwrap_or_else(|e| fail(e));
         result.map_err(|e| remote_failed(e, status, hosts[0], &opts.remote_bin)).map(|stats| stats.warnings == 0 && status.success())
     } else {
         // Both here: the receiver in a thread, over a socket pair.
-        let (a, b) = UnixStream::pair().unwrap_or_else(|e| fail(e));
-        let (a2, b2) = (a.try_clone().unwrap_or_else(|e| fail(e)), b.try_clone().unwrap_or_else(|e| fail(e)));
+        let ((r, w), (r2, w2)) = fsutil::local_pair().unwrap_or_else(|e| fail(e));
         let dest = PathBuf::from(dest);
         let ropts = receiver::RecvOpts { dest, commit: opts.commit, checksum: opts.checksum, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, excludes: excludes.clone(), delete: opts.delete, local: false };
-        let receiver = thread::spawn(move || receiver::run(Box::new(b), Box::new(b2), ropts));
+        let receiver = thread::spawn(move || receiver::run(r2, w2, ropts));
         let local_sources = sources.iter().map(|s| source_of(s)).collect();
-        let result = sender::run(Box::new(a), Box::new(a2), sender::SendOpts { sources: local_sources, commit: opts.commit, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, excludes: excludes.clone(), delete: opts.delete, local: true });
+        let result = sender::run(r, w, sender::SendOpts { sources: local_sources, commit: opts.commit, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, excludes: excludes.clone(), delete: opts.delete, local: true });
         let received = receiver.join().unwrap_or_else(|_| Err(io::Error::other("the receiver thread died")));
         match (result, received) {
             (Ok(clean), Ok(stats)) => Ok(clean && stats.warnings == 0),
@@ -348,7 +384,48 @@ fn main() {
     });
 }
 
-#[allow(dead_code)]
-fn os_string(bytes: Vec<u8>) -> OsString {
-    OsString::from_vec(bytes)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quoting_for_both_shells() {
+        assert_eq!(remote_quote(b"/home/max/dst"), "\"/home/max/dst\"");
+        assert_eq!(remote_quote(b"C:\\Users\\Max\\dst"), "\"C:\\Users\\Max\\dst\"");
+        // A backslash at the end, or before a quote, is doubled.
+        assert_eq!(remote_quote(b"C:\\dst\\"), "\"C:\\dst\\\\\"");
+        assert_eq!(remote_quote(b"a\"b"), "\"a\\\"b\"");
+        assert_eq!(remote_quote(b"a\\\"b"), "\"a\\\\\\\"b\"");
+        assert_eq!(remote_quote(b"$HOME/x `y`"), "\"\\$HOME/x \\`y\\`\"");
+    }
+
+    #[test]
+    fn remote_or_not() {
+        assert_eq!(remote_of(OsStr::new("host:dir")).map(|(h, _)| h), Some("host".to_string()));
+        assert_eq!(remote_of(OsStr::new("user@host:/x")).map(|(_, p)| p), Some(b"/x".to_vec()));
+        assert_eq!(remote_of(OsStr::new("host:C:/Users")).map(|(_, p)| p), Some(b"C:/Users".to_vec()));
+        assert!(remote_of(OsStr::new("dir/a:b")).is_none());
+        assert!(remote_of(OsStr::new(":x")).is_none());
+        if cfg!(windows) {
+            assert!(remote_of(OsStr::new("C:\\Users")).is_none());
+            assert!(remote_of(OsStr::new("c:/users")).is_none());
+            assert!(remote_of(OsStr::new("C:")).is_none());
+            assert!(remote_of(OsStr::new(".\\a:b")).is_none());
+        }
+    }
+
+    #[test]
+    fn sources() {
+        assert!(source_of(OsStr::new("dir/")).contents);
+        assert!(source_of(OsStr::new(".")).contents);
+        assert!(source_of(OsStr::new("..")).contents);
+        assert!(!source_of(OsStr::new("dir")).contents);
+        assert!(!source_of(OsStr::new("../dir")).contents);
+        if cfg!(windows) {
+            assert!(source_of(OsStr::new(".\\dir\\")).contents);
+            assert!(source_of(OsStr::new("C:\\")).contents);
+            assert!(source_of(OsStr::new("C:")).contents);
+            assert!(!source_of(OsStr::new("..\\dir")).contents);
+        }
+    }
 }

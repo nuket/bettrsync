@@ -30,7 +30,7 @@ if [ -n "${BETTRSYNC_GIT_REVISION:-}" ]; then
     GIT_REV=$BETTRSYNC_GIT_REVISION
 else
     GIT_REV=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    GIT_DIRTY=$(git status --porcelain 2>/dev/null)
+    GIT_DIRTY=$(git status --porcelain 2>/dev/null || true)
     [ -n "$GIT_DIRTY" ] && GIT_REV="${GIT_REV}-modified"
 fi
 

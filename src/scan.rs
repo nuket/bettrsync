@@ -4,13 +4,12 @@
 //! time as the walk goes, sorted within the directory, and a directory
 //! is always handed out before anything in it.
 
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex};
 use std::thread;
 
 use crate::filter::Excludes;
+use crate::fsutil;
 use crate::proto::{KIND_DIR, KIND_FILE, KIND_LINK};
 
 /// A source as given on the command line.  With `contents` (a trailing
@@ -45,16 +44,8 @@ struct Walk<'a> {
 }
 
 fn entry_of(rel: Vec<u8>, abs: PathBuf, meta: &std::fs::Metadata, kind: u8, target: Vec<u8>) -> Entry {
-    Entry {
-        kind,
-        rel,
-        abs,
-        size: if kind == KIND_FILE { meta.len() } else { 0 },
-        mode: meta.mode() & 0o7777,
-        mtime_s: meta.mtime(),
-        mtime_ns: meta.mtime_nsec() as u32,
-        target,
-    }
+    let (mtime_s, mtime_ns) = fsutil::mtime(meta);
+    Entry { kind, rel, abs, size: if kind == KIND_FILE { meta.len() } else { 0 }, mode: fsutil::mode_of(meta), mtime_s, mtime_ns, target }
 }
 
 /// The entry for what lies at `abs`, or None with a warning for anything
@@ -67,7 +58,7 @@ fn classify(rel: Vec<u8>, abs: PathBuf, meta: &std::fs::Metadata, warnings: &mut
         Some(entry_of(rel, abs, meta, KIND_FILE, Vec::new()))
     } else if ft.is_symlink() {
         match std::fs::read_link(&abs) {
-            Ok(t) => Some(entry_of(rel, abs, meta, KIND_LINK, t.as_os_str().as_bytes().to_vec())),
+            Ok(t) => Some(entry_of(rel, abs, meta, KIND_LINK, fsutil::target_bytes(&t))),
             Err(e) => {
                 warnings.push(format!("{}: cannot read link: {e}", abs.display()));
                 None
@@ -103,7 +94,7 @@ pub fn scan(sources: &[Source], threads: usize, excludes: &Excludes, emit: Emit)
                 queue.0.push((s.path.clone(), Vec::new()));
                 continue;
             }
-            let name = s.path.file_name().map(|n| n.as_bytes().to_vec()).unwrap_or_default();
+            let name = s.path.file_name().map(|n| fsutil::name_bytes(n).to_vec()).unwrap_or_default();
             if let Some(entry) = classify(name.clone(), s.path.clone(), &meta, &mut warnings) {
                 if entry.kind == KIND_DIR {
                     queue.0.push((s.path.clone(), name));
@@ -161,7 +152,7 @@ fn read_dir(w: &Walk, dir: &Path, rel: &[u8]) {
                 if !r.is_empty() {
                     r.push(b'/');
                 }
-                r.extend_from_slice(item.file_name().as_bytes());
+                r.extend_from_slice(fsutil::name_bytes(&item.file_name()));
                 let meta = match std::fs::symlink_metadata(&abs) {
                     Ok(m) => m,
                     Err(e) => {

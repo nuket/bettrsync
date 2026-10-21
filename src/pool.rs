@@ -5,7 +5,6 @@
 
 use std::fs::File;
 use std::io;
-use std::os::unix::fs::FileExt;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
@@ -80,7 +79,7 @@ pub fn read_chunk(file: &File, offset: u64, len: usize) -> io::Result<Vec<u8>> {
     let mut buf = vec![0u8; len];
     let mut got = 0;
     while got < len {
-        let n = file.read_at(&mut buf[got..], offset + got as u64)?;
+        let n = crate::fsutil::read_at(file, &mut buf[got..], offset + got as u64)?;
         if n == 0 {
             break;
         }

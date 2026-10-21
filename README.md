@@ -16,12 +16,15 @@ links.  Owners and groups are not copied.  Nothing is deleted unless
 A file the destination already has, of the same size and time, is left
 alone.  One that differs is updated in place: both sides hash it in
 blocks, at the same time, on all their cores, and only the blocks that
-differ cross the wire, while the hashing goes on.  That is what makes a
+differ cross the wire, while the hashing goes on.  A destination file
+its owner may not write (0444, or read-only on Windows) is given owner
+write for the update and the source's bits after it.  That is what makes a
 VM disk image with a few hundred changed spots a matter of seconds.
 
 Either end may be remote, `[user@]host:path`, over ssh, with bettrsync
 installed on the host too, on the PATH a non-interactive login shell
 sees, or named with `--remote-bin`.  Two local paths work without ssh.
+It runs on Linux and on Windows, and either may be at either end.
 
 ## Dry run by default
 
@@ -83,6 +86,32 @@ the destination has.  A dry run lists what would go, as `delete`.  If the
 sending side had any warning, an unreadable directory for one, nothing
 is deleted, since the list it sent may be short.
 
+## On Windows
+
+The same binary, `bettrsync.exe`, with the same options.  A path may be
+spelled either way: `src/`, `.\src\`, `..\images`, `C:\VMs\` or
+`C:/VMs/`; a trailing slash or backslash means the contents, as above.
+A drive letter is not a host, so `C:\dst` is local, and a remote path
+on a Windows host is written after the host's own colon,
+`winbox:C:/Users/Max/dst` or `winbox:C:\Users\Max\dst`, or relative to
+the ssh user's home, `winbox:dst`.  The remote command line is quoted
+so that cmd (Windows' OpenSSH shell) and sh both read it; a `$` or
+backtick in a path on a Windows host is the one thing that does not
+survive it.  Exclude patterns use `/` whatever the side, since the
+paths they match are the wire's.
+
+Windows keeps modification times to 100 ns, so a Linux file's
+nanoseconds are rounded there and the comparison allows for it both
+ways.  The only permission bit it has is the read-only attribute: a
+source file without owner write becomes read-only there, a read-only
+source file is 0444 on Linux, and directories carry no bits.  Symbolic links
+need a privilege (Developer Mode, or an elevated session) that an ssh
+session does not have by default; without it a link is a warning and
+counts as failed, and everything else goes through.  NTFS does not
+tell `Foo` from `foo`, so `--delete` does not either there.  Names
+that Windows cannot hold (`:`, `*`, `?` and so on) fail to be created
+and are reported.
+
 Smaller blocks send less when the changes are small and scattered: on a
 4 GiB image with 200 changed spots of 4 KiB to 1 MiB, 16K blocks sent
 71 MiB, 64K 80 MiB, 128K 93 MiB, 1M 261 MiB, and the hashing took the
@@ -122,6 +151,10 @@ hundred messages each way rather than a hundred thousand.
 `build.sh` builds in the `rust:bullseye` Docker image when Docker is
 there, so no Rust toolchain is needed on the build machine and the
 binary runs on any glibc from 2.31 up; otherwise it runs `cargo build`.
+`build.bat` does the same on Windows with rustup's MSVC toolchain, the C
+runtime linked in so the binary needs nothing beside it.  The only
+crates are xxhash-rust for the hashes and, on Unix, libc for the few
+calls std does not have; the Windows side is std alone.
 `tests/smoke.sh BIN SCRATCHDIR` checks a tree with links and times, an
 image changed in place, shrunk and grown, the remote code path through
 a stand-in for ssh, a tree of thousands of files changed every way at
@@ -132,7 +165,10 @@ on a changed image over ssh, page caches cold and hot on both sides,
 verifying the copies after every write.  `bench/tree.sh BIN USER@HOST
 SCRATCHDIR [FILES] [CHANGES]` does the same with a tree of many small
 files against `rsync -rlt`, verifying paths, sizes, times, links and
-contents.
+contents.  `tests/smoke.py BIN SCRATCHDIR` is the smoke test in Python,
+which runs on Windows too, with `tests/fakessh.py` standing in for ssh
+through the system's own shell; it also covers the spellings of a path
+and the read-only attribute there.
 
 On a 4 GiB image with 200 changed spots, over a 1 Gbps link from a
 6-core VM to a 16-core desktop:

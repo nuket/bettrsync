@@ -15,11 +15,8 @@
 //! neither side runs out of descriptors or memory.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
@@ -144,7 +141,7 @@ impl Shared {
         if self.single {
             self.opts.dest.clone()
         } else {
-            self.opts.dest.join(OsStr::from_bytes(rel))
+            self.opts.dest.join(fsutil::name_of(rel))
         }
     }
 
@@ -275,7 +272,7 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                 if shared.opts.delete {
                     let mut listed = shared.listed.lock().unwrap();
                     for w in &entries {
-                        listed.insert(w.path.clone());
+                        listed.insert(fsutil::fold_name(&w.path));
                     }
                 }
                 for w in entries {
@@ -297,7 +294,7 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                 debug_assert!(file.is_some(), "data for file {id}, which is not open");
                 if let Some(file) = file {
                     let t = Instant::now();
-                    let wrote = file.write_all_at(&data, offset);
+                    let wrote = fsutil::write_all_at(&file, &data, offset);
                     trace.add("writing files", t);
                     if let Err(e) = wrote {
                         let path = shared.open.lock().unwrap().get(&id).map(|o| o.path.clone()).unwrap_or_default();
@@ -363,7 +360,7 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                                 shared.sink.warn(format!("{}: cannot set mode: {e}", d.path.display()));
                             }
                         }
-                        let same = fs::symlink_metadata(&d.path).map(|m| m.mtime() == d.mtime_s && m.mtime_nsec() as u32 == d.mtime_ns).unwrap_or(true);
+                        let same = fs::symlink_metadata(&d.path).map(|m| fsutil::same_mtime(&m, d.mtime_s, d.mtime_ns)).unwrap_or(true);
                         if !same {
                             if let Err(e) = fsutil::set_mtime(&d.path, d.mtime_s, d.mtime_ns) {
                                 shared.sink.warn(format!("{}: cannot set time: {e}", d.path.display()));
@@ -423,9 +420,9 @@ fn finish_file(shared: &Shared, o: Open) {
 
 fn tmp_name(path: &PathBuf) -> PathBuf {
     let mut name = b".".to_vec();
-    name.extend_from_slice(path.file_name().map(|n| n.as_bytes()).unwrap_or(b"file"));
+    name.extend_from_slice(path.file_name().map(fsutil::name_bytes).unwrap_or(b"file"));
     name.extend_from_slice(b".bettrsync.tmp");
-    path.with_file_name(OsStr::from_bytes(&name))
+    path.with_file_name(fsutil::name_of(&name))
 }
 
 /// The decider: entries in order, each answered with a Decision; the
@@ -476,8 +473,8 @@ fn decide_dir(shared: &Shared, ent: &Ent) -> u8 {
     let mut mode = Some(ent.mode);
     let exists = match fs::symlink_metadata(&path) {
         Ok(m) if m.is_dir() => {
-            let bits = m.mode() & 0o7777;
-            if bits == ent.mode {
+            let bits = fsutil::mode_of(&m);
+            if bits == fsutil::wanted_mode(ent.mode, true) {
                 mode = None;
             } else {
                 shared.sink.line(format!("chmod    {}/  {:o}", String::from_utf8_lossy(&ent.rel), ent.mode));
@@ -522,8 +519,8 @@ fn decide_link(shared: &Shared, ent: &Ent) -> u8 {
     let path = shared.dest_path(&ent.rel);
     let meta = fs::symlink_metadata(&path).ok();
     if let Some(m) = &meta {
-        if m.file_type().is_symlink() && fs::read_link(&path).map(|t| t.as_os_str().as_bytes() == &ent.target[..]).unwrap_or(false) {
-            if m.mtime() != ent.mtime_s && shared.opts.commit {
+        if m.file_type().is_symlink() && fsutil::link_points_to(&path, &ent.target) {
+            if fsutil::mtime(m).0 != ent.mtime_s && shared.opts.commit {
                 let _ = fsutil::set_mtime(&path, ent.mtime_s, ent.mtime_ns);
             }
             return DEC_SKIP;
@@ -534,7 +531,7 @@ fn decide_link(shared: &Shared, ent: &Ent) -> u8 {
             if meta.is_some() {
                 fsutil::remove_any(&path)?;
             }
-            std::os::unix::fs::symlink(OsStr::from_bytes(&ent.target), &path)?;
+            fsutil::symlink(&ent.target, &path)?;
             fsutil::set_mtime(&path, ent.mtime_s, ent.mtime_ns)
         })();
         if let Err(e) = made {
@@ -568,8 +565,8 @@ fn delete_extras(shared: &Shared) {
             if !child.is_empty() {
                 child.push(b'/');
             }
-            child.extend_from_slice(name.as_bytes());
-            if listed.contains(&child) {
+            child.extend_from_slice(fsutil::name_bytes(&name));
+            if listed.contains(&fsutil::fold_name(&child)) {
                 continue;
             }
             let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -633,10 +630,9 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
     let existing = match fs::symlink_metadata(&path) {
         Ok(m) if m.file_type().is_file() => {
             // The same size and time: ours was set to the nanosecond, so
-            // the nanoseconds count too, unless this file system keeps none.
-            let same_time = m.mtime() == ent.mtime_s && (m.mtime_nsec() as u32 == ent.mtime_ns || m.mtime_nsec() == 0);
-            let same = m.len() == ent.size && same_time;
-            let chmod = m.mode() & 0o7777 != ent.mode;
+            // the nanoseconds count too, as far as this file system keeps them.
+            let same = m.len() == ent.size && fsutil::same_mtime(&m, ent.mtime_s, ent.mtime_ns);
+            let chmod = fsutil::mode_of(&m) != fsutil::wanted_mode(ent.mode, false);
             if !shared.opts.checksum && same {
                 // Content and time as they should be; the bits, if not.
                 if chmod {
@@ -665,24 +661,29 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
         Err(_) => None,
     };
     let opened = match existing {
-        Some((m, same, chmod)) => match OpenOptions::new().read(true).write(commit).open(&path) {
-            Ok(f) => {
-                let file = Arc::new(f);
-                queue_hashes(shared, pool, id, file.clone(), m.len().min(ent.size));
-                (file, None, DEC_DELTA, m.len(), same, chmod)
+        Some((m, same, chmod)) => {
+            // Windows: a read-only file is not writable in place until the
+            // attribute is cleared; the bits are set again at the finish.
+            let cleared = commit && fsutil::clear_readonly(&path, &m).unwrap_or(false);
+            match OpenOptions::new().read(true).write(commit).open(&path) {
+                Ok(f) => {
+                    let file = Arc::new(f);
+                    queue_hashes(shared, pool, id, file.clone(), m.len().min(ent.size));
+                    (file, None, DEC_DELTA, m.len(), same, chmod || cleared)
+                }
+                Err(e) => {
+                    shared.sink.warn(format!("{}: cannot open: {e}", path.display()));
+                    release(shared, id);
+                    return (DEC_FAIL, 0);
+                }
             }
-            Err(e) => {
-                shared.sink.warn(format!("{}: cannot open: {e}", path.display()));
-                release(shared, id);
-                return (DEC_FAIL, 0);
-            }
-        },
+        }
         None => {
             if !commit {
                 return (DEC_WHOLE, 0);
             }
             let tmp = tmp_name(&path);
-            match OpenOptions::new().write(true).create(true).truncate(true).mode(ent.mode | 0o600).open(&tmp) {
+            match fsutil::create(&tmp, ent.mode) {
                 Ok(f) => (Arc::new(f), Some(tmp), DEC_WHOLE, 0, false, true),
                 Err(e) => {
                     shared.sink.warn(format!("{}: cannot create: {e}", path.display()));
