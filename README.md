@@ -1,16 +1,17 @@
 # bettrsync
 
-A small sync tool that does what `rsync -rltv --inplace` does, and does
-it with every core on both ends.
+A small sync tool that does what `rsync -rltpv --inplace` does, and
+does it with every core on both ends.
 
     bettrsync [OPTIONS] SOURCE... DESTINATION
 
 Directories, regular files and symbolic links under the sources are
 copied into the destination, keeping modification times to the
-nanosecond.  Symlinks are copied as links.  Permissions, owners and
-groups are not copied: a new file gets the source's permission bits
-under the receiving umask, an existing one keeps its own.  Nothing is
-deleted unless `--delete` says so.
+nanosecond and permission bits exactly, on new and existing files and
+directories alike; a file or directory that differs in its bits alone
+is listed as `chmod` and counts as unchanged.  Symlinks are copied as
+links.  Owners and groups are not copied.  Nothing is deleted unless
+`--delete` says so.
 
 A file the destination already has, of the same size and time, is left
 alone.  One that differs is updated in place: both sides hash it in

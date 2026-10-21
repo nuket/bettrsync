@@ -72,6 +72,20 @@ struct Open {
     /// either, it is left exactly as it was.
     same: bool,
     touched: bool,
+    /// The source's permission bits, to set at the end if `chmod`: a new
+    /// file always, an existing one whose bits differ.
+    mode: u32,
+    chmod: bool,
+}
+
+/// A directory the sender listed: stamped, and given its mode if that
+/// differs, at Finish, when nothing more is written into it.
+struct Dir {
+    path: PathBuf,
+    rel: Vec<u8>,
+    mtime_s: i64,
+    mtime_ns: u32,
+    mode: Option<u32>,
 }
 
 /// Where warnings and listing lines go.
@@ -110,7 +124,7 @@ struct Shared {
     ecv: Condvar,
     open: Mutex<HashMap<u32, Open>>,
     ocv: Condvar,
-    dirs: Mutex<Vec<(PathBuf, Vec<u8>, i64, u32)>>,
+    dirs: Mutex<Vec<Dir>>,
     // Every path the sender listed, for --delete.
     listed: Mutex<HashSet<Vec<u8>>>,
     dead: AtomicBool,
@@ -339,11 +353,16 @@ fn read_loop(shared: &Arc<Shared>, r: &mut Box<dyn Read + Send>) -> io::Result<R
                     }
                 }
                 if shared.opts.commit {
-                    for (path, _, s, ns) in shared.dirs.lock().unwrap().iter().rev() {
-                        let same = fs::symlink_metadata(path).map(|m| m.mtime() == *s && m.mtime_nsec() as u32 == *ns).unwrap_or(true);
+                    for d in shared.dirs.lock().unwrap().iter().rev() {
+                        if let Some(mode) = d.mode {
+                            if let Err(e) = fsutil::set_mode(&d.path, mode) {
+                                shared.sink.warn(format!("{}: cannot set mode: {e}", d.path.display()));
+                            }
+                        }
+                        let same = fs::symlink_metadata(&d.path).map(|m| m.mtime() == d.mtime_s && m.mtime_nsec() as u32 == d.mtime_ns).unwrap_or(true);
                         if !same {
-                            if let Err(e) = fsutil::set_mtime(path, *s, *ns) {
-                                shared.sink.warn(format!("{}: cannot set time: {e}", path.display()));
+                            if let Err(e) = fsutil::set_mtime(&d.path, d.mtime_s, d.mtime_ns) {
+                                shared.sink.warn(format!("{}: cannot set time: {e}", d.path.display()));
                             }
                         }
                     }
@@ -377,6 +396,9 @@ fn finish_file(shared: &Shared, o: Open) {
         if o.touched || !o.same {
             file.set_len(o.size)?;
             fsutil::set_mtime_fd(&file, o.mtime_s, o.mtime_ns)?;
+        }
+        if o.chmod {
+            fsutil::set_mode_fd(&file, o.mode)?;
         }
         drop(file);
         if let Some(tmp) = &o.tmp {
@@ -447,8 +469,25 @@ fn decide(shared: &Arc<Shared>) {
 }
 fn decide_dir(shared: &Shared, ent: &Ent) -> u8 {
     let path = shared.dest_path(&ent.rel);
+    let mut mode = Some(ent.mode);
     let exists = match fs::symlink_metadata(&path) {
-        Ok(m) if m.is_dir() => true,
+        Ok(m) if m.is_dir() => {
+            let bits = m.mode() & 0o7777;
+            if bits == ent.mode {
+                mode = None;
+            } else {
+                shared.sink.line(format!("chmod    {}/  {:o}", String::from_utf8_lossy(&ent.rel), ent.mode));
+            }
+            // A directory we cannot work in is opened up for the run and
+            // given its proper bits at Finish, whatever they are.
+            if bits & 0o700 != 0o700 && shared.opts.commit {
+                mode = Some(ent.mode);
+                if let Err(e) = fsutil::set_mode(&path, bits | 0o700) {
+                    shared.sink.warn(format!("{}: cannot open the directory up: {e}", path.display()));
+                }
+            }
+            true
+        }
         Ok(_) => {
             if shared.opts.commit {
                 if let Err(e) = fsutil::remove_any(&path) {
@@ -466,7 +505,7 @@ fn decide_dir(shared: &Shared, ent: &Ent) -> u8 {
             return DEC_FAIL;
         }
     }
-    shared.dirs.lock().unwrap().push((path, ent.rel.clone(), ent.mtime_s, ent.mtime_ns));
+    shared.dirs.lock().unwrap().push(Dir { path, rel: ent.rel.clone(), mtime_s: ent.mtime_s, mtime_ns: ent.mtime_ns, mode });
     if exists {
         DEC_SKIP
     } else {
@@ -510,7 +549,7 @@ fn decide_link(shared: &Shared, ent: &Ent) -> u8 {
 fn delete_extras(shared: &Shared) {
     let listed = shared.listed.lock().unwrap();
     let dirs = shared.dirs.lock().unwrap();
-    for (path, rel, _, _) in dirs.iter() {
+    for Dir { path, rel, .. } in dirs.iter() {
         let items = match fs::read_dir(path) {
             Ok(items) => items,
             Err(e) => {
@@ -563,7 +602,7 @@ fn queue_file(shared: &Arc<Shared>, pool: &Arc<Pool>, id: u32, ent: Ent, trace: 
             open = shared.ocv.wait_timeout(open, TICK).unwrap().0;
         }
         trace.add("waiting for a slot", t);
-        open.insert(id, Open { file: None, path, tmp: None, size: ent.size, mtime_s: ent.mtime_s, mtime_ns: ent.mtime_ns, same: false, touched: false });
+        open.insert(id, Open { file: None, path, tmp: None, size: ent.size, mtime_s: ent.mtime_s, mtime_ns: ent.mtime_ns, same: false, touched: false, mode: ent.mode, chmod: false });
     }
     let shared = shared.clone();
     let pool = pool.clone();
@@ -593,11 +632,21 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
             // the nanoseconds count too, unless this file system keeps none.
             let same_time = m.mtime() == ent.mtime_s && (m.mtime_nsec() as u32 == ent.mtime_ns || m.mtime_nsec() == 0);
             let same = m.len() == ent.size && same_time;
+            let chmod = m.mode() & 0o7777 != ent.mode;
             if !shared.opts.checksum && same {
+                // Content and time as they should be; the bits, if not.
+                if chmod {
+                    shared.sink.line(format!("chmod    {}  {:o}", String::from_utf8_lossy(&ent.rel), ent.mode));
+                    if commit {
+                        if let Err(e) = fsutil::set_mode(&path, ent.mode) {
+                            shared.sink.warn(format!("{}: cannot set mode: {e}", path.display()));
+                        }
+                    }
+                }
                 release(shared, id);
                 return (DEC_SKIP, 0);
             }
-            Some((m, same))
+            Some((m, same, chmod))
         }
         Ok(_) => {
             if commit {
@@ -612,11 +661,11 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
         Err(_) => None,
     };
     let opened = match existing {
-        Some((m, same)) => match OpenOptions::new().read(true).write(commit).open(&path) {
+        Some((m, same, chmod)) => match OpenOptions::new().read(true).write(commit).open(&path) {
             Ok(f) => {
                 let file = Arc::new(f);
                 queue_hashes(shared, pool, id, file.clone(), m.len().min(ent.size));
-                (file, None, DEC_DELTA, m.len(), same)
+                (file, None, DEC_DELTA, m.len(), same, chmod)
             }
             Err(e) => {
                 shared.sink.warn(format!("{}: cannot open: {e}", path.display()));
@@ -630,7 +679,7 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
             }
             let tmp = tmp_name(&path);
             match OpenOptions::new().write(true).create(true).truncate(true).mode(ent.mode | 0o600).open(&tmp) {
-                Ok(f) => (Arc::new(f), Some(tmp), DEC_WHOLE, 0, false),
+                Ok(f) => (Arc::new(f), Some(tmp), DEC_WHOLE, 0, false, true),
                 Err(e) => {
                     shared.sink.warn(format!("{}: cannot create: {e}", path.display()));
                     release(shared, id);
@@ -639,11 +688,12 @@ fn open_file(shared: &Arc<Shared>, pool: &Pool, id: u32, ent: &Ent) -> (u8, u64)
             }
         }
     };
-    let (file, tmp, kind, dest_size, same) = opened;
+    let (file, tmp, kind, dest_size, same, chmod) = opened;
     if let Some(o) = shared.open.lock().unwrap().get_mut(&id) {
         o.file = Some(file);
         o.tmp = tmp;
         o.same = same;
+        o.chmod = chmod;
     }
     (kind, dest_size)
 }

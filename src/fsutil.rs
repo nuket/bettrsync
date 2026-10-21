@@ -46,6 +46,19 @@ pub fn allow_open_files(want: u64) -> u64 {
     lim.rlim_cur as u64
 }
 
+/// The permission bits of an open file.
+pub fn set_mode_fd(file: &File, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(fs::Permissions::from_mode(mode))
+}
+
+/// The permission bits of a directory (or anything else that is not a
+/// symlink).
+pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
 /// Removes whatever is at `path`: a directory with its contents, or
 /// anything else as one entry.
 pub fn remove_any(path: &Path) -> io::Result<()> {

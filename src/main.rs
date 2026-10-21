@@ -35,7 +35,8 @@ const USAGE: &str = "\
 usage: bettrsync [OPTIONS] SOURCE... DESTINATION
 
 Copies directories, files and symlinks from the sources into the
-destination, as rsync -rlt does, keeping modification times; files the
+destination, as rsync -rltp does, keeping modification times and
+permission bits; files the
 destination has already are updated in place, only the blocks that
 differ being sent.  A source with a trailing slash contributes its
 contents, without it the directory itself.  Either end may be remote,

@@ -198,4 +198,17 @@ echo e > xdst/a/extra3
 "${REMOTE[@]}" -q --commit --delete xsrc/ "fake:$PWD/xdst/" | grep -q 'deleted 1' && test ! -e xdst/a/extra3 && ok "delete over rsh" || fail "delete over rsh"
 diff -r xsrc xdst >/dev/null && ok "mirror over rsh" || fail "not a mirror over rsh"
 
+# Permission bits: set on a file and a directory already there, and on
+# a new file past what the umask would give.
+echo "== modes"
+chmod 666 xsrc/a/keep; chmod 710 xsrc/c
+mkdir xsrc/m; chmod 700 xsrc/m; echo n > xsrc/m/n; chmod 666 xsrc/m/n
+out=$("$BIN" --commit xsrc/ xdst/)
+test "$(echo "$out" | grep -c '^chmod')" = 2 && ok "chmod listed for the two existing" || fail "chmod lines: $(echo "$out" | grep '^chmod')"
+echo "$out" | grep -q 'unchanged 1[0-9], updated 0, new 1 files, 1 dirs' && ok "a chmod alone is unchanged" || fail "counts: $(echo "$out" | grep total)"
+diff <(cd xsrc && find . -printf '%p %m\n' | sort) <(cd xdst && find . -printf '%p %m\n' | sort) >/dev/null && ok "modes match" || fail "modes differ: $(diff <(cd xsrc && find . -printf '%p %m\n' | sort) <(cd xdst && find . -printf '%p %m\n' | sort))"
+"$BIN" --commit xsrc/ xdst/ | grep -q '^chmod' && fail "chmod again" || ok "nothing to chmod after"
+"${REMOTE[@]}" -q --commit xsrc/ "fake:$PWD/xdst3/"
+diff <(cd xsrc && find . -printf '%p %m\n' | sort) <(cd xdst3 && find . -printf '%p %m\n' | sort) >/dev/null && ok "modes over rsh" || fail "modes over rsh"
+
 echo "ALL OK"

@@ -109,7 +109,17 @@ done and what was found.
   stamps.  Finish carries the sender's warning count: with any, nothing
   is deleted, as rsync does on an I/O error.  Listing lines for deletes
   travel as Report messages to the sender, which prints them.
-- No permissions, owner, or group.  Nanosecond mtimes,
+- Permission bits (the 0o7777 of the source's mode) are copied
+  exactly: a file's at its finish (a new one is created under the
+  umask first), a directory's at Finish with its time, so a read-only
+  source directory does not stop its own contents from being written;
+  an existing destination directory without owner rwx is opened up
+  (u+rwx) when the receiver reaches it and given its proper bits at
+  Finish, as rsync does.  (Found by the test with an unreadable source
+  directory: the first run copied its 000, the next could not write
+  into it.)  A file or directory already right but for its bits gets a chmod and
+  a `chmod` listing line, and counts as unchanged.  No owner or group;
+  nothing is asked of the umask.  Nanosecond mtimes,
   compared to the nanosecond (second-only comparison skipped a file
   changed within the second it was made).
 
