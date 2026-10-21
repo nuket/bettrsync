@@ -101,8 +101,10 @@ done and what was found.
   socket pair, it made no difference.
 - `--exclude` prunes the sender's scan (an excluded directory is never
   read) and protects on the receiver's `--delete`; the same patterns
-  go to both sides, so pulling excludes too.  The matcher is rsync's
-  reading of a pattern, in `filter.rs`, with unit tests.  `--delete`
+  go to both sides, so pulling excludes too.  `--exclude-from` is read
+  where the command runs and its patterns join that list, so the remote
+  end never needs the file.  The matcher is rsync's reading of a
+  pattern, in `filter.rs`, with unit tests.  `--delete`
   runs on the receiver at Finish, from the set of every path the sender
   listed (a HashSet, 50 to 100 MB for a million), over each directory
   the sender listed, after the last rename and before the directory

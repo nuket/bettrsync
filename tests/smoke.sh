@@ -174,6 +174,14 @@ test "$(cd xdst && find . -type f | sort | tr '\n' ' ')" = "./a/keep ./b/top " &
 test ! -e xdst/a/cache -a ! -e xdst/top -a -d xdst/c/deep/er && ok "excluded dirs, anchored, kept" || fail "excluded dirs"
 "${REMOTE[@]}" -q --commit "${EXCL[@]}" xsrc/ "fake:$PWD/xdst2/"
 diff -r xdst xdst2 >/dev/null && ok "excludes over rsh" || fail "excludes over rsh"
+# --exclude-from: the same patterns from a file, comments and blanks
+# skipped, mixed with --exclude, and from stdin over the fake rsh.
+printf '# comment\n*.tmp\n\n; also a comment\ncache/\n/top\n' > xfrom
+"$BIN" -q --commit --exclude-from xfrom --exclude 'deep/**/leaf.log' xsrc/ xdst3/
+diff -r xdst xdst3 >/dev/null && ok "--exclude-from" || fail "--exclude-from: $(cd xdst3 && find . -type f | sort | tr '\n' ' ')"
+"${REMOTE[@]}" -q --commit --exclude-from - --exclude 'deep/**/leaf.log' xsrc/ "fake:$PWD/xdst4/" < xfrom
+diff -r xdst xdst4 >/dev/null && ok "--exclude-from - over rsh" || fail "--exclude-from - over rsh"
+! "$BIN" -q --exclude-from xmissing xsrc/ xdst3/ 2>xerr && grep -q 'xmissing' xerr && ok "missing file refused" || fail "missing file not refused"
 
 # --delete: extras go, excluded extras stay, a dry run only lists, and
 # a warning on the sending side deletes nothing.

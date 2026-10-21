@@ -53,6 +53,7 @@ versions, block sizes, and cache states.
     -e, --rsh COMMAND    how to reach a remote host (default: ssh)
         --remote-bin P   bettrsync on the remote host (default: bettrsync)
         --exclude PAT    leave out what matches PAT; may be given more than once
+        --exclude-from F read patterns from F, one a line; - for stdin
         --delete         remove from the destination what the source does not have
 
 A source with a trailing slash contributes its contents, `src/`; without
@@ -67,6 +68,9 @@ it starts with a slash, `/top`, and otherwise anywhere on a directory
 boundary.  A trailing slash matches directories only, `cache/`.  `*`
 matches within a name, `**` across slashes, `?` one character, `[a-z]`
 a class, `\` escapes.  An excluded directory is not entered at all.
+`--exclude-from` reads the same patterns from a file, one a line, with
+blank lines and lines starting with `#` or `;` skipped, and `-` for
+standard input; the file is read on the side the command runs on.
 
 `--delete` removes, from each directory the source has, whatever the
 source does not: files, links, and directories with everything in

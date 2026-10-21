@@ -57,6 +57,8 @@ contents, without it the directory itself.  Either end may be remote,
                        slash (anchored there with a leading slash); a trailing
                        slash means directories only; * ** ? [..] \\ as usual;
                        may be given more than once
+      --exclude-from F read patterns from F, one a line, blank lines and
+                       lines starting with # or ; skipped; - for stdin
       --delete         remove from the destination what the source does not
                        have (excluded things are left alone; with any warning
                        on the sending side nothing is deleted)
@@ -82,6 +84,13 @@ fn usage_error(what: String) -> ! {
     eprintln!("bettrsync: {what}");
     eprintln!("try bettrsync --help");
     process::exit(2);
+}
+
+/// The patterns in an exclude file, one a line: blank lines and lines
+/// starting with # or ; are skipped, as rsync does; - reads stdin.
+fn read_patterns(file: &str) -> io::Result<Vec<String>> {
+    let text = if file == "-" { io::read_to_string(io::stdin())? } else { std::fs::read_to_string(file)? };
+    Ok(text.lines().filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with(';')).map(str::to_string).collect())
 }
 
 fn parse_size(s: &str) -> Option<usize> {
@@ -142,6 +151,10 @@ fn parse_args() -> Opts {
             }
             "-e" | "--rsh" => opts.rsh = value("a command"),
             "--exclude" => opts.excludes.push(value("a pattern")),
+            "--exclude-from" => {
+                let f = value("a file");
+                opts.excludes.extend(read_patterns(&f).unwrap_or_else(|e| usage_error(format!("{f}: {e}"))));
+            }
             "--delete" => opts.delete = true,
             "--remote-bin" => opts.remote_bin = value("a path"),
             "--server" => {}
