@@ -36,18 +36,17 @@ usage: bettrsync [OPTIONS] SOURCE... DESTINATION
 
 Copies directories, files and symlinks from the sources into the
 destination, as rsync -rltp does, keeping modification times and
-permission bits; files the
-destination has already are updated in place, only the blocks that
-differ being sent.  A source with a trailing slash contributes its
-contents, without it the directory itself.  Either end may be remote,
-[user@]host:path, over ssh, with bettrsync installed there too.
+permission bits; files the destination has already are updated in
+place, only the blocks that differ being sent.  A source with a
+trailing slash contributes its contents, without it the directory
+itself.  Either end may be remote, [user@]host:path, over ssh, with
+bettrsync installed there too.
 
-  -n, --dry-run        read, hash and compare, report, write nothing (default)
-      --commit         write to the destination
+      --commit         write to the destination (without it: read, hash,
+                       compare and report, writing nothing)
   -c, --checksum       compare the blocks of every file, not only those whose
                        size or modification time differs
   -q, --quiet          no listing, only the summary
-  -v, --verbose        the listing (default)
   -B, --block-size N   the block size, K, M or G suffix (default 64K)
   -j, --threads N      threads for hashing and scanning (default: the cores)
   -e, --rsh COMMAND    how to reach a remote host (default: ssh)
@@ -136,11 +135,9 @@ fn parse_args() -> Opts {
         };
         match name.as_str() {
             "--" => only_paths = true,
-            "-n" | "--dry-run" => opts.commit = false,
             "--commit" => opts.commit = true,
             "-c" | "--checksum" => opts.checksum = true,
             "-q" | "--quiet" => opts.quiet = true,
-            "-v" | "--verbose" => opts.quiet = false,
             "-B" | "--block-size" => {
                 let v = value("a size");
                 opts.block = parse_size(&v).unwrap_or_else(|| usage_error(format!("{v} is not a block size")));
@@ -170,13 +167,11 @@ fn parse_args() -> Opts {
             }
             _ if text.starts_with("--") => usage_error(format!("unknown option {text}")),
             _ => {
-                // A cluster of short flags, -nq.
+                // A cluster of short flags, -cq.
                 for c in text[1..].chars() {
                     match c {
-                        'n' => opts.commit = false,
                         'c' => opts.checksum = true,
                         'q' => opts.quiet = true,
-                        'v' => opts.quiet = false,
                         'h' => {
                             print!("{USAGE}");
                             process::exit(0);

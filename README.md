@@ -26,7 +26,9 @@ installed on the host too.  Two local paths work without ssh.
 
 Nothing is written without `--commit`.  The default run does all the
 reading, hashing and comparing, lists what it would do, and ends with a
-summary of how long each part took and what it would send:
+summary of how long each part took and what it would send.  There is no
+`-n` or `-v`, since that is already what a plain run does; rsync's
+habits get an unknown-option error rather than a surprise:
 
     update   images/dev.vdi  1,165 of 65,536 blocks, 72.8 MiB
 
@@ -42,12 +44,11 @@ versions, block sizes, and cache states.
 
 ## Options
 
-    -n, --dry-run        read, hash and compare, report, write nothing (default)
-        --commit         write to the destination
+        --commit         write to the destination (without it: read, hash,
+                         compare and report, writing nothing)
     -c, --checksum       compare the blocks of every file, not only those whose
                          size or modification time differs
     -q, --quiet          no listing, only the summary
-    -v, --verbose        the listing (default)
     -B, --block-size N   the block size, K, M or G suffix (default 64K)
     -j, --threads N      threads for hashing and scanning (default: the cores)
     -e, --rsh COMMAND    how to reach a remote host (default: ssh)
