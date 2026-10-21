@@ -238,6 +238,23 @@ fn remote_command(opts: &Opts, host: &str, send: bool, paths: &[Vec<u8>]) -> Com
     cmd
 }
 
+/// What to say when the remote end's process ended badly: a bettrsync
+/// that was not there, an rsh that failed, or a remote that died.  The
+/// remote's own stderr is already on the screen above.
+fn remote_failed(e: io::Error, status: process::ExitStatus, host: &str, remote_bin: &str) -> io::Error {
+    if status.success() {
+        return e;
+    }
+    let what = match status.code() {
+        Some(127) => format!("{remote_bin} was not found on {host}: install it there, or give its path with --remote-bin"),
+        Some(126) => format!("{remote_bin} on {host} could not be run"),
+        Some(255) => format!("could not reach {host}: the connection failed"),
+        Some(n) => format!("{remote_bin} on {host} ended with status {n} before the transfer finished: {e}"),
+        None => format!("{remote_bin} on {host} was killed before the transfer finished: {e}"),
+    };
+    io::Error::new(e.kind(), what)
+}
+
 fn fail(e: io::Error) -> ! {
     eprintln!("bettrsync: {e}");
     process::exit(2);
@@ -299,7 +316,7 @@ fn main() {
         let local_sources = sources.iter().map(|s| source_of(s)).collect();
         let result = sender::run(r, w, sender::SendOpts { sources: local_sources, commit: opts.commit, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, excludes: excludes.clone(), delete: opts.delete, local: true });
         let status = child.wait().unwrap_or_else(|e| fail(e));
-        result.map(|clean| clean && status.success())
+        result.map_err(|e| remote_failed(e, status, &host, &opts.remote_bin)).map(|clean| clean && status.success())
     } else if any_remote_source {
         // Receiving from a remote sender.
         let paths: Vec<Vec<u8>> = remote_sources.iter().flatten().map(|(_, p)| p.clone()).collect();
@@ -308,7 +325,7 @@ fn main() {
         let w: Box<dyn Write + Send> = Box::new(child.stdin.take().unwrap());
         let result = receiver::run(r, w, receiver::RecvOpts { dest: PathBuf::from(dest), commit: opts.commit, checksum: opts.checksum, block: opts.block, threads: opts.threads, max_open, quiet: opts.quiet, excludes: excludes.clone(), delete: opts.delete, local: true });
         let status = child.wait().unwrap_or_else(|e| fail(e));
-        result.map(|stats| stats.warnings == 0 && status.success())
+        result.map_err(|e| remote_failed(e, status, hosts[0], &opts.remote_bin)).map(|stats| stats.warnings == 0 && status.success())
     } else {
         // Both here: the receiver in a thread, over a socket pair.
         let (a, b) = UnixStream::pair().unwrap_or_else(|e| fail(e));

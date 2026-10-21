@@ -160,7 +160,11 @@ impl Shared {
 
 pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: RecvOpts) -> io::Result<RecvStats> {
     // The handshake, before any thread touches the wire.
-    let single_file = match read_msg(&mut r)? {
+    let hello = read_msg(&mut r).map_err(|e| match e.kind() {
+        io::ErrorKind::UnexpectedEof => io::Error::new(e.kind(), "the sender closed the connection before the handshake"),
+        _ => e,
+    })?;
+    let single_file = match hello {
         Msg::Hello { version, single_file } => {
             if version != VERSION {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, format!("the sender speaks protocol {version}, this is {VERSION}")));

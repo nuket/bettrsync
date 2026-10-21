@@ -20,7 +20,8 @@ differ cross the wire, while the hashing goes on.  That is what makes a
 VM disk image with a few hundred changed spots a matter of seconds.
 
 Either end may be remote, `[user@]host:path`, over ssh, with bettrsync
-installed on the host too.  Two local paths work without ssh.
+installed on the host too, on the PATH a non-interactive login shell
+sees, or named with `--remote-bin`.  Two local paths work without ssh.
 
 ## Dry run by default
 

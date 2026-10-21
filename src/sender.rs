@@ -147,7 +147,11 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
     let single_file = opts.sources.len() == 1 && !opts.sources[0].contents && !opts.sources[0].path.is_dir();
     write_msg(&mut w, &Msg::Hello { version: VERSION, single_file })?;
     w.flush()?;
-    match read_msg(&mut r)? {
+    let hello = read_msg(&mut r).map_err(|e| match e.kind() {
+        io::ErrorKind::UnexpectedEof => io::Error::new(e.kind(), "the receiver closed the connection before the handshake"),
+        _ => e,
+    })?;
+    match hello {
         Msg::Hello { version, .. } if version == VERSION => {}
         Msg::Hello { version, .. } => {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("the receiver speaks protocol {version}, this is {VERSION}")))

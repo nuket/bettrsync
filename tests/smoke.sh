@@ -162,6 +162,12 @@ PY
 cmp tree/d0/f0100 tdst/d0/f0100 && ok "repaired with -c" || fail "not repaired with -c"
 "${REMOTE[@]}" -q -c tree/ "fake:$PWD/tdst/" | grep -q 'unchanged 3,6.*updated 0, new 0' && ok "-c clean after" || fail "-c not clean after"
 
+# A remote bettrsync that is not there, both ways: a clear message, exit 2.
+echo "== remote not found"
+! "$BIN" -e "$FAKESSH" --remote-bin /nonexistent/bettrsync tree/ "fake:$PWD/xnone/" 2>xerr && grep -q 'not found on fake.*--remote-bin' xerr && ok "push: not found" || fail "push: not found: $(cat xerr)"
+! "$BIN" -e "$FAKESSH" --remote-bin /nonexistent/bettrsync "fake:$PWD/tree/" xnone/ 2>xerr && grep -q 'not found on fake.*--remote-bin' xerr && ok "pull: not found" || fail "pull: not found: $(cat xerr)"
+test ! -e xnone && ok "nothing created" || fail "xnone created"
+
 # --exclude: a name anywhere, a directory-only name, an anchored path,
 # a path with ** across levels; the same over the fake rsh.
 echo "== --exclude"
