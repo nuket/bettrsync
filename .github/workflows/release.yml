@@ -6,7 +6,7 @@
 # built by build.sh in the rust:bullseye image so it runs on any glibc
 # from 2.31 up and packaged on the runner (bullseye's own apt is past
 # its day), and an Arch package made by makepkg in the archlinux image;
-# macOS as one universal binary in a tar.gz; Windows as a zip.  With
+# macOS as one universal binary in a tar.gz; Windows as a zip. With
 # the secrets GPG_SIGNING_KEY (and GPG_PASSPHRASE) set, everything is
 # signed by packaging/sign.sh; without them the release is unsigned.
 # Run by hand (workflow_dispatch) it builds the same packages and

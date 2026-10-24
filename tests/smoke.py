@@ -8,7 +8,7 @@ and a read-only file (and links, where they can be made), an image
 changed in a few places, shrunk and grown, the remote code path through
 a stand-in for ssh, a tree of thousands of files changed every way at
 once, -c, --exclude, --exclude-from, --delete, the bits, and on
-Windows the spellings of a path.  Stops at the first check that fails;
+Windows the spellings of a path. Stops at the first check that fails;
 prints ALL OK at the end.
 
 usage: smoke.py BETTRSYNC SCRATCHDIR

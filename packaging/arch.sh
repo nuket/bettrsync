@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Makes the Arch package, bettrsync-VERSION-1-ARCH.pkg.tar.zst, for
-# pacman -U, from this tree with packaging/arch/PKGBUILD.  On an Arch
+# pacman -U, from this tree with packaging/arch/PKGBUILD. On an Arch
 # system (CachyOS, Manjaro...) makepkg runs here; anywhere else with
 # Docker, in the archlinux image, this script running itself there.
 # The result is installed and run once, to be sure it is good.

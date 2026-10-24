@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Max Vilimpoc
 # SPDX-License-Identifier: MIT
 # Builds and tests on every push and pull request, on the three systems
-# bettrsync runs on.  The runners' own stable Rust is used; on Linux
+# bettrsync runs on. The runners' own stable Rust is used; on Linux
 # the packaging and signing scripts run too, with a key made on the
 # spot and thrown away, so a release never finds them broken.
 name: CI

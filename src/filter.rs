@@ -6,7 +6,7 @@
 //! matched against a name anywhere in the tree, one with a slash
 //! against the path under the destination, anchored there if it starts
 //! with a slash and ending anywhere on a directory boundary if not; a
-//! trailing slash matches directories only.  `*` matches within a name,
+//! trailing slash matches directories only. `*` matches within a name,
 //! `**` across slashes, `?` one character, `[a-z]` a class, `\` escapes.
 
 struct Pattern {

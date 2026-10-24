@@ -4,11 +4,11 @@
 # SPDX-License-Identifier: MIT
 """Compares two trees as bettrsync should have made the second from the
 first: every path, kind, size, time and bits, and the contents of every
-file.  Times are compared to the nanosecond on Linux and to 100 ns on
+file. Times are compared to the nanosecond on Linux and to 100 ns on
 Windows, where that is what NTFS keeps; bits are the mode's 0o7777 on
-Linux and the read-only attribute on Windows.  --via-windows compares
+Linux and the read-only attribute on Windows. --via-windows compares
 a Linux tree that went through a Windows machine and back the way
-Windows could have kept it; --no-links leaves symlinks out.  Prints
+Windows could have kept it; --no-links leaves symlinks out. Prints
 the first differences and exits 1 if there are any.
 
 usage: treecmp.py [--via-windows] [--no-links] A B

@@ -10,13 +10,13 @@
 # package since that is the name pacman looks for, .asc for the rest;
 # then SHA256SUMS is written over the files and clearsigned as
 # SHA256SUMS.asc, and the public key is copied in as
-# bettrsync-signing-key.asc.  Everything is verified against that
+# bettrsync-signing-key.asc. Everything is verified against that
 # public key alone before this script ends.
 #
 # The private key comes from GPG_SIGNING_KEY (the armored key, as the
 # GitHub secret holds it), imported into a keyring that is thrown away
 # afterwards, or else from the keyring GnuPG would use anyway: point
-# GNUPGHOME at the keystore.  GPG_PASSPHRASE, when set, unlocks it
+# GNUPGHOME at the keystore. GPG_PASSPHRASE, when set, unlocks it
 # without a prompt.
 #
 # usage: packaging/sign.sh DIR

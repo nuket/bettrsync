@@ -2,7 +2,7 @@
 # bettrsync
 # Copyright (c) 2026 Max Vilimpoc
 # SPDX-License-Identifier: MIT
-# Builds bettrsync.  On Linux the build runs in the rust:bullseye Docker
+# Builds bettrsync. On Linux the build runs in the rust:bullseye Docker
 # image, as Shove's Cli/build.sh does, so the build systems need no Rust
 # toolchain and the binary links against an old glibc that runs anywhere.
 
@@ -41,8 +41,8 @@ if [[ "$(uname)" != "Linux" ]] || ! command -v docker >/dev/null; then
     BETTRSYNC_GIT_REVISION="$GIT_REV" cargo build $CARGO_FLAGS
 else
     # Build as the invoking user, not as root, so target/ and Cargo.lock come
-    # out owned by whoever ran this.  passwd/group are mounted so the uid/gid
-    # resolve to the same names inside the container.  The cargo cache lives
+    # out owned by whoever ran this. passwd/group are mounted so the uid/gid
+    # resolve to the same names inside the container. The cargo cache lives
     # in a host directory for the same reason: a named volume is root-owned.
     CARGO_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/bettrsync/cargo"
     mkdir -p "$CARGO_CACHE"

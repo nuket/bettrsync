@@ -8,7 +8,7 @@
 //! bettrsync [OPTIONS] SOURCE... DESTINATION
 //!
 //! A source or the destination may be remote, [user@]host:path, reached
-//! over ssh, which runs bettrsync there (--server).  Nothing is written
+//! over ssh, which runs bettrsync there (--server). Nothing is written
 //! without --commit: the default run does all the reading, hashing and
 //! comparing, reports what it would send, and how long each part took.
 
@@ -38,9 +38,9 @@ usage: bettrsync [OPTIONS] SOURCE... DESTINATION
 Copies directories, files and symlinks from the sources into the
 destination, as rsync -rltp does, keeping modification times and
 permission bits; files the destination has already are updated in
-place, only the blocks that differ being sent.  A source with a
+place, only the blocks that differ being sent. A source with a
 trailing slash contributes its contents, without it the directory
-itself.  Either end may be remote, [user@]host:path, over ssh, with
+itself. Either end may be remote, [user@]host:path, over ssh, with
 bettrsync installed there too.
 
       --commit         write to the destination (without it: read, hash,
@@ -211,10 +211,10 @@ fn remote_of(path: &OsStr) -> Option<(String, Vec<u8>)> {
 }
 
 /// An argument on the remote shell's command line, whichever shell that
-/// is: sh on Unix, cmd on Windows.  Both take double quotes.  A " inside
+/// is: sh on Unix, cmd on Windows. Both take double quotes. A " inside
 /// is written \", and a run of backslashes before one, or at the end, is
 /// doubled, since that is how a program on Windows reads its command
-/// line and how sh reads a double-quoted string too.  $ and ` are
+/// line and how sh reads a double-quoted string too. $ and ` are
 /// escaped for sh; a path with those on a Windows host is beyond this.
 fn remote_quote(bytes: &[u8]) -> String {
     let mut out = String::from("\"");
@@ -276,7 +276,7 @@ fn remote_command(opts: &Opts, host: &str, send: bool, paths: &[Vec<u8>]) -> Com
 }
 
 /// What to say when the remote end's process ended badly: a bettrsync
-/// that was not there, an rsh that failed, or a remote that died.  The
+/// that was not there, an rsh that failed, or a remote that died. The
 /// remote's own stderr is already on the screen above.
 fn remote_failed(e: io::Error, status: process::ExitStatus, host: &str, remote_bin: &str) -> io::Error {
     if status.success() {

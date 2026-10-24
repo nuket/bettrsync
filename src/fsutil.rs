@@ -8,7 +8,7 @@
 //! Windows has only as the read-only attribute; names as the wire
 //! carries them; reads and writes at an offset; the standard streams
 //! as plain bytes; and the two ends of a connection between a sender
-//! and a receiver in one process.  Everything else is std, which does
+//! and a receiver in one process. Everything else is std, which does
 //! the same on both.
 
 use std::ffi::{OsStr, OsString};
@@ -18,7 +18,7 @@ use std::path::Path;
 
 /// A name as the wire carries it: the bytes the file system holds on
 /// Unix; on Windows UTF-8 (WTF-8, for a name with an unpaired
-/// surrogate).  Parts of a path are joined with / on the wire.
+/// surrogate). Parts of a path are joined with / on the wire.
 #[cfg(unix)]
 pub fn name_bytes(name: &OsStr) -> &[u8] {
     use std::os::unix::ffi::OsStrExt;
@@ -29,7 +29,7 @@ pub fn name_bytes(name: &OsStr) -> &[u8] {
     name.as_encoded_bytes()
 }
 
-/// A name from the wire.  On Windows the parts are joined with \ as
+/// A name from the wire. On Windows the parts are joined with \ as
 /// paths are written there, and a name that is not UTF-8 (one a Linux
 /// file system held as bytes) gets replacement characters.
 #[cfg(unix)]
@@ -166,7 +166,7 @@ pub fn set_mtime_fd(file: &File, s: i64, ns: u32) -> io::Result<()> {
     file.set_modified(t)
 }
 
-/// The permission bits, the 0o7777 of the mode.  Windows has only the
+/// The permission bits, the 0o7777 of the mode. Windows has only the
 /// read-only attribute, which reads as 0o444 against 0o644, and a
 /// directory as 0o755.
 #[cfg(unix)]
@@ -232,7 +232,7 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
 
 /// A file its owner may not write cannot be updated in place: gives it
 /// owner write for the update, and says so, so the caller sets the
-/// source's bits at the end.  On Windows that is the read-only
+/// source's bits at the end. On Windows that is the read-only
 /// attribute, which also stops a delete until it is cleared.
 #[cfg(unix)]
 pub fn clear_readonly(path: &Path, m: &Metadata) -> io::Result<bool> {

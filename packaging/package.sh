@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Max Vilimpoc
 # SPDX-License-Identifier: MIT
 # Packages a Linux build of bettrsync: a tar.gz, a .deb, and an .rpm when
-# rpmbuild is there.  Nothing but dpkg-deb and rpmbuild is needed: the
+# rpmbuild is there. Nothing but dpkg-deb and rpmbuild is needed: the
 # control file and the spec are written here, from Cargo.toml's version,
 # description and license.
 #
@@ -59,9 +59,9 @@ Depends: libc6 (>= 2.31)
 Recommends: openssh-client
 Homepage: https://github.com/nuket/bettrsync
 Description: rsync -rltp with in-place, parallel block updates
- $DESCRIPTION.  Files the destination already has are
+ $DESCRIPTION. Files the destination already has are
  updated in place, both sides hashing them in blocks on every core at
- once, so only the blocks that differ cross the wire.  Either end may be
+ once, so only the blocks that differ cross the wire. Either end may be
  remote over ssh, with bettrsync installed there too.
 CONTROL
 dpkg-deb --build --root-owner-group "$deb" "$OUT/bettrsync_${VERSION}_$ARCH.deb" >/dev/null
@@ -84,9 +84,9 @@ Recommends:     openssh-clients
 %global _build_id_links none
 
 %description
-$DESCRIPTION.  Files the destination already has are
+$DESCRIPTION. Files the destination already has are
 updated in place, both sides hashing them in blocks on every core at
-once, so only the blocks that differ cross the wire.  Either end may be
+once, so only the blocks that differ cross the wire. Either end may be
 remote over ssh, with bettrsync installed there too.
 
 %install

@@ -12,7 +12,7 @@
 //! the wire; the pool reads and hashes the source in chunks; the
 //! comparer takes each chunk, waits for the receiver's hashes of the
 //! same blocks, and queues the differing ones for the writer, which puts
-//! everything on the wire.  The main thread feeds the pool, in the order
+//! everything on the wire. The main thread feeds the pool, in the order
 //! the receiver decides, up to `max_open` files at a time, from the
 //! moment the first decision comes.
 
@@ -225,7 +225,7 @@ pub fn run(mut r: Box<dyn Read + Send>, mut w: Box<dyn Write + Send>, opts: Send
         })
     };
 
-    // The lister: the scan, sent in batches as it goes.  The list is
+    // The lister: the scan, sent in batches as it goes. The list is
     // held while a batch goes out, so batches reach the wire in the
     // order the walk made them: a directory before its contents.
     let lister = {
@@ -529,7 +529,7 @@ fn feed_file(shared: &Arc<Shared>, pool: &Pool, res_tx: &mpsc::SyncSender<Res>, 
         shared.hashed_bytes.fetch_add(e.size, Ordering::Relaxed);
     }
     if chunks.is_empty() {
-        // An empty file: the receiver truncates and stamps it.  One that
+        // An empty file: the receiver truncates and stamps it. One that
         // is empty there already is unchanged, as a file with no
         // differing block is, whatever its time.
         if delta && dest_size == 0 {

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 # A smoke test of bettrsync between two local directories: a small tree
 # with links and times, then an image changed in a few places, shrunk and
-# grown.  Stops at the first check that fails; prints ALL OK at the end.
+# grown. Stops at the first check that fails; prints ALL OK at the end.
 #
 # usage: tests/smoke.sh BETTRSYNC SCRATCHDIR
 

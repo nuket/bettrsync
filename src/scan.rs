@@ -4,7 +4,7 @@
 
 //! The source tree, walked by several threads at once: every directory,
 //! regular file and symlink under the sources, with the path each has
-//! under the destination.  The entries are handed out a directory at a
+//! under the destination. The entries are handed out a directory at a
 //! time as the walk goes, sorted within the directory, and a directory
 //! is always handed out before anything in it.
 
@@ -16,7 +16,7 @@ use crate::filter::Excludes;
 use crate::fsutil;
 use crate::proto::{KIND_DIR, KIND_FILE, KIND_LINK};
 
-/// A source as given on the command line.  With `contents` (a trailing
+/// A source as given on the command line. With `contents` (a trailing
 /// slash, or a name like . that has no base name) the directory's
 /// contents land in the destination; else the directory itself does.
 pub struct Source {

@@ -12,9 +12,9 @@
 //! order, making directories and links itself and handing each file to
 //! the file pool, which stats and opens it (or creates it) and sends the
 //! decision; the writer puts the messages for the sender on the wire.
-//! The hash pool hashes.  A finished file's truncate, timestamp and
+//! The hash pool hashes. A finished file's truncate, timestamp and
 //! rename go to the file pool too, so the reader never waits on the
-//! file system.  Up to `max_open` files are open at a time: the decider
+//! file system. Up to `max_open` files are open at a time: the decider
 //! waits for the sender to finish with one before opening the next, so
 //! neither side runs out of descriptors or memory.
 
@@ -44,7 +44,7 @@ pub struct RecvOpts {
     /// Files in flight at a time.
     pub max_open: usize,
     /// This process is the one the user ran: warnings go to stderr, and
-    /// the sender's report lines to stdout.  Else they go over the wire.
+    /// the sender's report lines to stdout. Else they go over the wire.
     pub local: bool,
     pub quiet: bool,
     pub excludes: Arc<Excludes>,
@@ -592,7 +592,7 @@ fn delete_extras(shared: &Shared) {
 }
 
 /// Takes a slot for the file and hands it to the file pool, which
-/// answers for it.  A placeholder holds the slot meanwhile: no data can
+/// answers for it. A placeholder holds the slot meanwhile: no data can
 /// come for the file before its decision goes out.
 fn queue_file(shared: &Arc<Shared>, pool: &Arc<Pool>, id: u32, ent: Ent, trace: &crate::trace::Trace) {
     let path = shared.dest_path(&ent.rel);
