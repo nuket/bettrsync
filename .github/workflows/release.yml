@@ -6,8 +6,11 @@
 # built by build.sh in the rust:bullseye image so it runs on any glibc
 # from 2.31 up and packaged on the runner (bullseye's own apt is past
 # its day), and an Arch package made by makepkg in the archlinux image;
-# macOS as one universal binary in a tar.gz; Windows as a zip.  Run by hand (workflow_dispatch) it builds the same
-# packages and keeps them as workflow artifacts, without a release.
+# macOS as one universal binary in a tar.gz; Windows as a zip.  With
+# the secrets GPG_SIGNING_KEY (and GPG_PASSPHRASE) set, everything is
+# signed by packaging/sign.sh; without them the release is unsigned.
+# Run by hand (workflow_dispatch) it builds the same packages and
+# keeps them as workflow artifacts, without a release.
 name: Release
 
 on:
@@ -132,17 +135,29 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      SIGN: ${{ secrets.GPG_SIGNING_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: Signatures and checksums
+        if: env.SIGN == 'true'
+        env:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q rpm >/dev/null
+          packaging/sign.sh dist && cat dist/SHA256SUMS
       - name: Checksums
+        if: env.SIGN != 'true'
         run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - name: The release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           notes="bettrsync ${GITHUB_REF_NAME#v}: Linux x86_64 and aarch64 (tar.gz, .deb, .rpm; glibc 2.31 or newer), an Arch package for pacman -U (x86_64), macOS (universal), Windows x86_64. See README.md for what it does and how to use it."
+          [ "$SIGN" = true ] && notes="$notes Signed with the key in bettrsync-signing-key.asc; README.md says how to check."
           gh release create "${GITHUB_REF_NAME}" --title "bettrsync ${GITHUB_REF_NAME#v}" --notes "${notes}" dist/*

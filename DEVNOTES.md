@@ -86,6 +86,22 @@ done and what was found.
   written out, rather than windows-sys.
 - Commit to main as each milestone works.
 
+## Signing
+
+The release key lives in ../bettrsync-keystore (a folder shared in
+from the host, outside every repository), made once by make-key.sh
+there: RSA 4096, sign only, three years.  packaging/sign.sh signs a
+directory of release files with it, from GPG_SIGNING_KEY in the
+environment (the workflow) or the keyring GNUPGHOME names (by hand),
+and picks the key by the fingerprint of packaging/bettrsync-signing-key.asc,
+so the key that signs is always the one the repo publishes.  RPMs get
+the signature embedded with rpmsign (Ubuntu's rpm package has it; the
+runner installs it), everything else a detached one; pacman wants a
+binary .sig beside the package, and once there is one it insists on
+knowing the key, hence the pacman-key lines in the README.  The
+workflow signs only when the secret is set (a job-level env from the
+secrets context, since step `if` cannot read secrets).
+
 ## Design decisions
 
 - The scan streams: the lister thread sends entries a directory at a

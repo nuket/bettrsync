@@ -170,6 +170,38 @@ anything.
 
 pacman takes the release page's URL in place of the file.
 
+### Signed releases
+
+When a release is signed (its notes say so), it was signed with the
+key in `packaging/bettrsync-signing-key.asc`, which is also on the
+release page as `bettrsync-signing-key.asc`; `gpg --show-keys` on that
+file prints the fingerprint.  Every file has a detached signature
+beside it, `.sig` for the Arch package and `.asc` for the rest, the
+`.rpm` carries its signature inside as well, and `SHA256SUMS` is
+clearsigned as `SHA256SUMS.asc`.  To check a download:
+
+    gpg --import bettrsync-signing-key.asc
+    gpg --verify SHA256SUMS.asc && sha256sum -c --ignore-missing SHA256SUMS
+    gpg --verify bettrsync-0.1.0-linux-x86_64.tar.gz.asc           # or any one file
+
+    sudo rpm --import bettrsync-signing-key.asc && rpm -K bettrsync-0.1.0-1.x86_64.rpm
+
+    sudo pacman-key --add bettrsync-signing-key.asc
+    sudo pacman-key --lsign-key <fingerprint>
+
+pacman checks the `.sig` it finds beside a package (and fetches it
+when given a URL), and refuses a package signed by a key it has not
+been told about: on Arch, run the two `pacman-key` lines once, or
+install from a download without the `.sig` beside it.
+
+The signing is `packaging/sign.sh DIR`, run by the release workflow
+when the repository secrets `GPG_SIGNING_KEY` (the armored private
+key) and `GPG_PASSPHRASE` are set, or by hand with `GNUPGHOME` pointed
+at the key, over the files downloaded from a release; it signs
+everything in the directory and checks each signature with nothing
+but the public key before it ends.  Without the secret, releases are
+unsigned and have only `SHA256SUMS`.
+
 ## Building and testing
 
 `build.sh` builds in the `rust:bullseye` Docker image when Docker is

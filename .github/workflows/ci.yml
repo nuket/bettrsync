@@ -2,8 +2,9 @@
 # Copyright (c) 2026 Max Vilimpoc
 # SPDX-License-Identifier: MIT
 # Builds and tests on every push and pull request, on the three systems
-# bettrsync runs on.  The runners' own stable Rust is used; nothing is
-# installed.
+# bettrsync runs on.  The runners' own stable Rust is used; on Linux
+# the packaging and signing scripts run too, with a key made on the
+# spot and thrown away, so a release never finds them broken.
 name: CI
 
 on:
@@ -42,3 +43,15 @@ jobs:
       - name: Debug build with the protocol assertions
         run: cargo build && python3 tests/smoke.py target/debug/bettrsync "${RUNNER_TEMP}/smoke-debug"
         if: runner.os == 'Linux'
+      - name: Packaging and signing, with a throwaway key
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q rpm >/dev/null
+          packaging/package.sh target/release/bettrsync amd64 "${RUNNER_TEMP}/dist"
+          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --quick-generate-key --passphrase ci "CI <ci@example.invalid>" rsa2048 sign 1d
+          gpg --armor --export > packaging/bettrsync-signing-key.asc
+          GPG_PASSPHRASE=ci packaging/sign.sh "${RUNNER_TEMP}/dist"
+          rpm --dbpath "${RUNNER_TEMP}/rpmdb" --import packaging/bettrsync-signing-key.asc
+          rpm --dbpath "${RUNNER_TEMP}/rpmdb" -K "${RUNNER_TEMP}"/dist/*.rpm
