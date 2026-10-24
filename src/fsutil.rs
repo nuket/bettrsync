@@ -1,3 +1,7 @@
+// bettrsync
+// Copyright (c) 2026 Max Vilimpoc
+// SPDX-License-Identifier: MIT
+
 //! What the file system is asked for that std does not offer the same
 //! way everywhere: modification times to the nanosecond, set without
 //! following a symlink and on an open file; permission bits, which

@@ -1,3 +1,7 @@
+// bettrsync
+// Copyright (c) 2026 Max Vilimpoc
+// SPDX-License-Identifier: MIT
+
 //! bettrsync - rsync -rltv, with the files updated in place and the
 //! comparing done by every core on both sides at once.
 //!

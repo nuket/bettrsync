@@ -1,3 +1,6 @@
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 # A release for a tag vX.Y.Z (which must match Cargo.toml's version):
 # Linux x86_64 and aarch64 as a tar.gz, a .deb and an .rpm, the binary
 # built by build.sh in the rust:bullseye image so it runs on any glibc

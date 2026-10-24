@@ -1,3 +1,6 @@
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 # The Windows binary carries its C runtime, so it runs on a machine
 # without the Visual C++ redistributable.
 [target.x86_64-pc-windows-msvc]

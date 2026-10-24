@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 """A smoke test of bettrsync between two local directories, in Python
 so that it runs on Windows as well as Linux: a small tree with times
 and a read-only file (and links, where they can be made), an image

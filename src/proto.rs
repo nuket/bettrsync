@@ -1,3 +1,7 @@
+// bettrsync
+// Copyright (c) 2026 Max Vilimpoc
+// SPDX-License-Identifier: MIT
+
 //! The wire protocol between the sending and the receiving side, the same
 //! whether the two are threads in one process or a process here and one
 //! over ssh.  A message is a tag byte and little-endian fields; a byte

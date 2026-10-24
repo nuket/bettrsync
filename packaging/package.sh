@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 # Packages a Linux build of bettrsync: a tar.gz, a .deb, and an .rpm when
 # rpmbuild is there.  Nothing but dpkg-deb and rpmbuild is needed: the
 # control file and the spec are written here, from Cargo.toml's version,

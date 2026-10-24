@@ -1,3 +1,7 @@
+// bettrsync
+// Copyright (c) 2026 Max Vilimpoc
+// SPDX-License-Identifier: MIT
+
 //! Where a thread's time went, printed at its end when BETTRSYNC_TRACE
 //! is set: for finding what a slow sync was waiting on.
 

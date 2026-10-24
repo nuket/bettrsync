@@ -1,3 +1,7 @@
+// bettrsync
+// Copyright (c) 2026 Max Vilimpoc
+// SPDX-License-Identifier: MIT
+
 //! The receiving side: takes the sender's list of entries, decides for
 //! each what the destination needs (nothing, the whole file, or a
 //! block-by-block update), hashes the files to update with every core,

@@ -256,3 +256,7 @@ round changes 6,666 files and adds 3,334:
 The sender keeps the list of entries until each is decided, about
 300 bytes each: 310 MiB for the million; the receiver peaked at 89
 MiB.
+
+## License
+
+MIT; see LICENSE.

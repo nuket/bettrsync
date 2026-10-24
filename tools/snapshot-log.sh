@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 # Snapshots LOG.md and systems.yaml onto the local log-md branch, which
 # holds those two files and nothing else, without touching the working
 # tree or the main branch: the two are listed in .git/info/exclude and

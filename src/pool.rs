@@ -1,3 +1,7 @@
+// bettrsync
+// Copyright (c) 2026 Max Vilimpoc
+// SPDX-License-Identifier: MIT
+
 //! The threads that read and hash blocks, and the block geometry both
 //! sides agree on: a file is hashed in blocks of `block` bytes, read from
 //! disk in chunks of CHUNK_BYTES (or one block, if larger) so the reads

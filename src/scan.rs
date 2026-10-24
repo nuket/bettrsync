@@ -1,3 +1,7 @@
+// bettrsync
+// Copyright (c) 2026 Max Vilimpoc
+// SPDX-License-Identifier: MIT
+
 //! The source tree, walked by several threads at once: every directory,
 //! regular file and symlink under the sources, with the path each has
 //! under the destination.  The entries are handed out a directory at a

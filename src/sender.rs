@@ -1,3 +1,7 @@
+// bettrsync
+// Copyright (c) 2026 Max Vilimpoc
+// SPDX-License-Identifier: MIT
+
 //! The sending side: scans the sources, sends the list, and for each file
 //! the receiver wants updated, hashes it with every core while the
 //! receiver hashes its copy, sends only the blocks that differ, and

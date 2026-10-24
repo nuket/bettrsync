@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 """Compares two trees as bettrsync should have made the second from the
 first: every path, kind, size, time and bits, and the contents of every
 file.  Times are compared to the nanosecond on Linux and to 100 ns on

@@ -1,3 +1,7 @@
+// bettrsync
+// Copyright (c) 2026 Max Vilimpoc
+// SPDX-License-Identifier: MIT
+
 //! Exclude patterns, as rsync reads them: a pattern without a slash is
 //! matched against a name anywhere in the tree, one with a slash
 //! against the path under the destination, anchored there if it starts

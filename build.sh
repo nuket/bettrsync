@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 # Builds bettrsync.  On Linux the build runs in the rust:bullseye Docker
 # image, as Shove's Cli/build.sh does, so the build systems need no Rust
 # toolchain and the binary links against an old glibc that runs anywhere.

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 # Times rsync -rlt against bettrsync on a tree of many small files, over
 # ssh to a remote host, with the page caches cold and hot on both sides.
 # Run from the sending machine.  bench.sh is the same for one big image.

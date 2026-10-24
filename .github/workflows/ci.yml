@@ -1,3 +1,6 @@
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 # Builds and tests on every push and pull request, on the three systems
 # bettrsync runs on.  The runners' own stable Rust is used; nothing is
 # installed.

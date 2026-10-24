@@ -1,4 +1,7 @@
 @echo off
+rem bettrsync
+rem Copyright (c) 2026 Max Vilimpoc
+rem SPDX-License-Identifier: MIT
 rem Builds bettrsync on Windows with the cargo on the PATH (rustup's
 rem MSVC toolchain); the counterpart of build.sh.
 rem usage: build.bat [--debug|--release]

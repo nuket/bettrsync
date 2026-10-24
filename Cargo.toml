@@ -2,6 +2,8 @@
 name = "bettrsync"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/nuket/bettrsync"
 description = "A small sync tool: rsync -rltv with in-place, parallel block updates"
 
 [dependencies]

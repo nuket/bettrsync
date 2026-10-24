@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
 # Times rsync --inplace against bettrsync on one large image with a few
 # hundred changed spots, over ssh to a remote host, with the page caches
 # cold and then hot on both sides.  Run from the sending machine.
