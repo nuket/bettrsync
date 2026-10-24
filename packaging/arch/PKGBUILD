@@ -1,0 +1,40 @@
+# bettrsync
+# Copyright (c) 2026 Max Vilimpoc
+# SPDX-License-Identifier: MIT
+# Maintainer: Max Vilimpoc <max@vilimpoc.org>
+#
+# Built by packaging/arch.sh from the tree it sits in: the source
+# tarball and pkgver come from there, so this is not an AUR package,
+# just what makes the .pkg.tar.zst on the release page, for pacman -U.
+
+pkgname=bettrsync
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="rsync -rltp with in-place, parallel block updates"
+arch=('x86_64' 'aarch64')
+url="https://github.com/nuket/bettrsync"
+license=('MIT')
+depends=('glibc' 'gcc-libs')
+optdepends=('openssh: for a remote end')
+makedepends=('cargo')
+# One package, the binary stripped as Arch has it: no -debug split.
+options=('!debug')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    cargo build --release --locked
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    cargo test --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/bettrsync "$pkgdir/usr/bin/bettrsync"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

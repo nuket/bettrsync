@@ -5,8 +5,8 @@
 # Linux x86_64 and aarch64 as a tar.gz, a .deb and an .rpm, the binary
 # built by build.sh in the rust:bullseye image so it runs on any glibc
 # from 2.31 up and packaged on the runner (bullseye's own apt is past
-# its day); macOS as one universal binary in a tar.gz; Windows as a
-# zip.  Run by hand (workflow_dispatch) it builds the same
+# its day), and an Arch package made by makepkg in the archlinux image;
+# macOS as one universal binary in a tar.gz; Windows as a zip.  Run by hand (workflow_dispatch) it builds the same
 # packages and keeps them as workflow artifacts, without a release.
 name: Release
 
@@ -62,6 +62,18 @@ jobs:
           name: linux-${{ matrix.arch }}
           path: dist/*
 
+  arch:
+    needs: check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: The Arch package, in the archlinux image
+        run: packaging/arch.sh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arch
+          path: dist/*
+
   macos:
     needs: check
     runs-on: macos-latest
@@ -115,7 +127,7 @@ jobs:
           path: dist/*
 
   release:
-    needs: [linux, macos, windows]
+    needs: [linux, arch, macos, windows]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -132,5 +144,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="bettrsync ${GITHUB_REF_NAME#v}: Linux x86_64 and aarch64 (tar.gz, .deb, .rpm; glibc 2.31 or newer), macOS (universal), Windows x86_64. See README.md for what it does and how to use it."
+          notes="bettrsync ${GITHUB_REF_NAME#v}: Linux x86_64 and aarch64 (tar.gz, .deb, .rpm; glibc 2.31 or newer), an Arch package for pacman -U (x86_64), macOS (universal), Windows x86_64. See README.md for what it does and how to use it."
           gh release create "${GITHUB_REF_NAME}" --title "bettrsync ${GITHUB_REF_NAME#v}" --notes "${notes}" dist/*

@@ -154,15 +154,21 @@ GitHub Actions build and test every push on Linux, macOS and Windows
 version in `Cargo.toml` makes a release (`release.yml`) with, for Linux
 x86_64 and aarch64, a tar.gz, a `.deb` and an `.rpm`, built in the
 same Debian 11 image as `build.sh` so the binary runs on any glibc
-from 2.31 up; for macOS one universal binary in a tar.gz; for Windows
-a zip; and a `SHA256SUMS`.  The packages are made by
-`packaging/package.sh BINARY amd64|arm64 OUTDIR` with nothing but
-`dpkg-deb` and `rpmbuild`, which also works on a desk.  Run by hand
-from the Actions tab, the release workflow builds the same packages
-and keeps them as artifacts without publishing anything.
+from 2.31 up, and an Arch package built from the source by makepkg in
+the `archlinux` image; for macOS one universal binary in a tar.gz; for
+Windows a zip; and a `SHA256SUMS`.  The Debian and RPM packages are
+made by `packaging/package.sh BINARY amd64|arm64 OUTDIR` with nothing
+but `dpkg-deb` and `rpmbuild`, the Arch one by `packaging/arch.sh
+OUTDIR` with makepkg, or Docker where there is none; both also work on
+a desk.  Run by hand from the Actions tab, the release workflow builds
+the same packages and keeps them as artifacts without publishing
+anything.
 
-    sudo dpkg -i bettrsync_0.1.0_amd64.deb      # Debian, Ubuntu
-    sudo rpm -i bettrsync-0.1.0-1.x86_64.rpm    # Fedora, RHEL, SUSE
+    sudo dpkg -i bettrsync_0.1.0_amd64.deb                  # Debian, Ubuntu
+    sudo rpm -i bettrsync-0.1.0-1.x86_64.rpm                # Fedora, RHEL, SUSE
+    sudo pacman -U bettrsync-0.1.0-1-x86_64.pkg.tar.zst     # Arch, CachyOS, Manjaro
+
+pacman takes the release page's URL in place of the file.
 
 ## Building and testing
 
