@@ -128,9 +128,9 @@ Each release on GitHub has, for Linux x86_64 and aarch64, a tar.gz, a
 x86_64; a tar.gz with one universal binary for macOS; a zip for
 Windows; and `SHA256SUMS`.
 
-    sudo dpkg -i bettrsync_0.1.0_amd64.deb                  # Debian, Ubuntu
-    sudo rpm -i bettrsync-0.1.0-1.x86_64.rpm                # Fedora, RHEL, SUSE
-    sudo pacman -U bettrsync-0.1.0-1-x86_64.pkg.tar.zst     # Arch, CachyOS, Manjaro
+    sudo dpkg -i bettrsync_0.2.0_amd64.deb                  # Debian, Ubuntu
+    sudo rpm -i bettrsync-0.2.0-1.x86_64.rpm                # Fedora, RHEL, SUSE
+    sudo pacman -U bettrsync-0.2.0-1-x86_64.pkg.tar.zst     # Arch, CachyOS, Manjaro
 
 pacman takes the release page's URL in place of the file. The tar.gz
 and zip hold the binary itself; put it on the PATH.
@@ -144,12 +144,12 @@ a signature beside it (`.asc`, or `.sig` for the Arch package), and
 
     gpg --import bettrsync-signing-key.asc
     gpg --verify SHA256SUMS.asc && sha256sum -c --ignore-missing SHA256SUMS
-    gpg --verify bettrsync-0.1.0-linux-x86_64.tar.gz.asc        # or any one file
+    gpg --verify bettrsync-0.2.0-linux-x86_64.tar.gz.asc        # or any one file
 
 The `.rpm` carries its signature inside as well:
 
     sudo rpm --import bettrsync-signing-key.asc
-    rpm -K bettrsync-0.1.0-1.x86_64.rpm
+    rpm -K bettrsync-0.2.0-1.x86_64.rpm
 
 pacman checks the `.sig` beside a package and refuses a key it does
 not know, so on Arch tell it about the key once; the fingerprint is
