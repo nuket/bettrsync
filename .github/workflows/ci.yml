@@ -26,9 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: cargo build --release
-        env:
-          BETTRSYNC_GIT_REVISION: ${{ github.sha }}
+        run: BETTRSYNC_GIT_REVISION=${GITHUB_SHA::7} cargo build --release
       - name: Unit tests
         run: cargo test --release
       - name: Smoke test (Python, every platform)

@@ -22,9 +22,6 @@ defaults:
   run:
     shell: bash
 
-env:
-  BETTRSYNC_GIT_REVISION: ${{ github.sha }}
-
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -49,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build in rust:bullseye, as build.sh does
-        run: ./build.sh --release
+        run: BETTRSYNC_GIT_REVISION=${GITHUB_SHA::7} ./build.sh --release
       - name: Packaging tools
         run: sudo apt-get update -q && sudo apt-get install -y -q rpm >/dev/null
       - name: Smoke test of that binary
@@ -71,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: The Arch package, in the archlinux image
-        run: packaging/arch.sh dist
+        run: BETTRSYNC_GIT_REVISION=${GITHUB_SHA::7} packaging/arch.sh dist
       - uses: actions/upload-artifact@v4
         with:
           name: linux-arch
@@ -84,6 +81,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Both architectures, one binary
         run: |
+          export BETTRSYNC_GIT_REVISION=${GITHUB_SHA::7}
           rustup target add x86_64-apple-darwin aarch64-apple-darwin
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
@@ -112,7 +110,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: cargo build --release
+        run: BETTRSYNC_GIT_REVISION=${GITHUB_SHA::7} cargo build --release
       - name: Tests
         run: cargo test --release && python tests/smoke.py target/release/bettrsync.exe "${RUNNER_TEMP}/smoke"
       - name: Package
