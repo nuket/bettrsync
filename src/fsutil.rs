@@ -25,8 +25,9 @@ pub fn name_bytes(name: &OsStr) -> &[u8] {
     name.as_encoded_bytes()
 }
 
-/// A name from the wire.  On Windows a name that is not UTF-8 (one a
-/// Linux file system held as bytes) gets replacement characters.
+/// A name from the wire.  On Windows the parts are joined with \ as
+/// paths are written there, and a name that is not UTF-8 (one a Linux
+/// file system held as bytes) gets replacement characters.
 #[cfg(unix)]
 pub fn name_of(bytes: &[u8]) -> OsString {
     use std::os::unix::ffi::OsStringExt;
@@ -34,7 +35,7 @@ pub fn name_of(bytes: &[u8]) -> OsString {
 }
 #[cfg(windows)]
 pub fn name_of(bytes: &[u8]) -> OsString {
-    OsString::from(String::from_utf8_lossy(bytes).into_owned())
+    OsString::from(String::from_utf8_lossy(bytes).replace('/', "\\"))
 }
 
 /// A name as --delete compares it with what the sender listed: as it

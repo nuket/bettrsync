@@ -24,7 +24,8 @@ VM disk image with a few hundred changed spots a matter of seconds.
 Either end may be remote, `[user@]host:path`, over ssh, with bettrsync
 installed on the host too, on the PATH a non-interactive login shell
 sees, or named with `--remote-bin`.  Two local paths work without ssh.
-It runs on Linux and on Windows, and either may be at either end.
+It runs on Linux, macOS and Windows, and any of them may be at either
+end.
 
 ## Dry run by default
 
@@ -151,8 +152,10 @@ hundred messages each way rather than a hundred thousand.
 `build.sh` builds in the `rust:bullseye` Docker image when Docker is
 there, so no Rust toolchain is needed on the build machine and the
 binary runs on any glibc from 2.31 up; otherwise it runs `cargo build`.
-`build.bat` does the same on Windows with rustup's MSVC toolchain, the C
-runtime linked in so the binary needs nothing beside it.  The only
+On macOS `build.sh` runs cargo directly, and the binary is like the
+Linux one in every way that matters here.  `build.bat` does the same
+on Windows with rustup's MSVC toolchain, the C runtime linked in so the
+binary needs nothing beside it.  The only
 crates are xxhash-rust for the hashes and, on Unix, libc for the few
 calls std does not have; the Windows side is std alone.
 `tests/smoke.sh BIN SCRATCHDIR` checks a tree with links and times, an
@@ -166,9 +169,10 @@ verifying the copies after every write.  `bench/tree.sh BIN USER@HOST
 SCRATCHDIR [FILES] [CHANGES]` does the same with a tree of many small
 files against `rsync -rlt`, verifying paths, sizes, times, links and
 contents.  `tests/smoke.py BIN SCRATCHDIR` is the smoke test in Python,
-which runs on Windows too, with `tests/fakessh.py` standing in for ssh
-through the system's own shell; it also covers the spellings of a path
-and the read-only attribute there.
+which runs on macOS and Windows too (the shell one wants GNU find,
+stat and head), with `tests/fakessh.py` standing in for ssh through the
+system's own shell; it also covers the spellings of a path and the
+read-only attribute on Windows.
 
 On a 4 GiB image with 200 changed spots, over a 1 Gbps link from a
 6-core VM to a 16-core desktop:

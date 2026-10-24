@@ -68,6 +68,18 @@ done and what was found.
   `systems-deploy.py start dev-windows-10 --as cross <batch file>`,
   which runs it in the logged-in session with its output in
   `%USERPROFILE%\bettrsync\cross.log`.
+- macOS: the Mac mini (macmini in systems.yaml, 192.168.178.60, max,
+  id_testkey; Apple Silicon, macOS 27, cargo 1.99 in ~/.cargo/bin,
+  which non-interactive ssh sees) builds with
+  `python3 ../Shove/systems-build.py -f systems.yaml build macmini`;
+  build.sh runs cargo directly there.  The name must have no space,
+  as systems-build.py puts it in ssh's ControlPath.  `tests/smoke.sh`
+  does not run on BSD userland (head -c 256M, find -printf, stat -c):
+  `tests/smoke.py` is the Mac's smoke test, links included.  When the
+  Mac is off the network, the Headless2Go KVM on the control system
+  (systems-kvm.py: shot, wake, key, type, and a transfer pipe once
+  its agent runs there) is the way in; colour bars in a shot mean the
+  display is asleep, `wake` lights it.  It needed no code changes.
 - As few crates as possible, the cost of each weighed against what it
   brings: xxhash-rust for the hashes and libc on Unix is the whole
   list; the Windows side is std with the few Win32 constants it needs
