@@ -1,0 +1,41 @@
+# Builds and tests on every push and pull request, on the three systems
+# bettrsync runs on.  The runners' own stable Rust is used; nothing is
+# installed.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release
+        env:
+          BETTRSYNC_GIT_REVISION: ${{ github.sha }}
+      - name: Unit tests
+        run: cargo test --release
+      - name: Smoke test (Python, every platform)
+        run: python3 tests/smoke.py target/release/bettrsync "${RUNNER_TEMP}/smoke"
+        if: runner.os != 'Windows'
+      - name: Smoke test (Python, Windows)
+        run: python tests/smoke.py target/release/bettrsync.exe "${RUNNER_TEMP}/smoke"
+        if: runner.os == 'Windows'
+      - name: Smoke test (shell, Linux)
+        run: tests/smoke.sh target/release/bettrsync "${RUNNER_TEMP}/smoke-sh"
+        if: runner.os == 'Linux'
+      - name: Debug build with the protocol assertions
+        run: cargo build && python3 tests/smoke.py target/debug/bettrsync "${RUNNER_TEMP}/smoke-debug"
+        if: runner.os == 'Linux'

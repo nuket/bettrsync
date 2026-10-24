@@ -1,0 +1,133 @@
+# A release for a tag vX.Y.Z (which must match Cargo.toml's version):
+# Linux x86_64 and aarch64 as a tar.gz, a .deb and an .rpm, the binary
+# built by build.sh in the rust:bullseye image so it runs on any glibc
+# from 2.31 up and packaged on the runner (bullseye's own apt is past
+# its day); macOS as one universal binary in a tar.gz; Windows as a
+# zip.  Run by hand (workflow_dispatch) it builds the same
+# packages and keeps them as workflow artifacts, without a release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  BETTRSYNC_GIT_REVISION: ${{ github.sha }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "${GITHUB_REF_NAME}" = "v${version}" ] || { echo "tag ${GITHUB_REF_NAME} but Cargo.toml says ${version}"; exit 1; }
+
+  linux:
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build in rust:bullseye, as build.sh does
+        run: ./build.sh --release
+      - name: Packaging tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q rpm >/dev/null
+      - name: Smoke test of that binary
+        run: python3 tests/smoke.py target/release/bettrsync "${RUNNER_TEMP}/smoke"
+      - name: Package
+        run: packaging/package.sh target/release/bettrsync ${{ matrix.arch }} dist
+      - name: The packages install and run
+        run: |
+          sudo dpkg -i dist/*.deb && bettrsync --version
+          rpm -qpi dist/*.rpm && rpm -qpl dist/*.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+
+  macos:
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Both architectures, one binary
+        run: |
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p dist/stage
+          lipo -create -output dist/stage/bettrsync target/aarch64-apple-darwin/release/bettrsync target/x86_64-apple-darwin/release/bettrsync
+          lipo -info dist/stage/bettrsync
+      - name: Tests
+        run: cargo test --release && python3 tests/smoke.py dist/stage/bettrsync "${RUNNER_TEMP}/smoke"
+      - name: Package
+        run: |
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          name="bettrsync-${version}-macos-universal"
+          mkdir -p "dist/${name}"
+          cp dist/stage/bettrsync README.md "dist/${name}/"
+          [ -f LICENSE ] && cp LICENSE "dist/${name}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          rm -rf dist/stage "dist/${name}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  windows:
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release
+      - name: Tests
+        run: cargo test --release && python tests/smoke.py target/release/bettrsync.exe "${RUNNER_TEMP}/smoke"
+      - name: Package
+        run: |
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          name="bettrsync-${version}-windows-x86_64"
+          mkdir -p "dist/${name}"
+          cp target/release/bettrsync.exe README.md "dist/${name}/"
+          [ -f LICENSE ] && cp LICENSE "dist/${name}/"
+          (cd dist && 7z a -bso0 "${name}.zip" "${name}")
+          rm -rf "dist/${name}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  release:
+    needs: [linux, macos, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: The release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="bettrsync ${GITHUB_REF_NAME#v}: Linux x86_64 and aarch64 (tar.gz, .deb, .rpm; glibc 2.31 or newer), macOS (universal), Windows x86_64. See README.md for what it does and how to use it."
+          gh release create "${GITHUB_REF_NAME}" --title "bettrsync ${GITHUB_REF_NAME#v}" --notes "${notes}" dist/*

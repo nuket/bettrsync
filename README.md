@@ -147,6 +147,23 @@ ssh pipe or a socket pair in one process; entries and decisions travel
 in batches of up to 256, so a tree of a hundred thousand files is a few
 hundred messages each way rather than a hundred thousand.
 
+## Releases
+
+GitHub Actions build and test every push on Linux, macOS and Windows
+(`.github/workflows/ci.yml`), and a tag `vX.Y.Z` that matches the
+version in `Cargo.toml` makes a release (`release.yml`) with, for Linux
+x86_64 and aarch64, a tar.gz, a `.deb` and an `.rpm`, built in the
+same Debian 11 image as `build.sh` so the binary runs on any glibc
+from 2.31 up; for macOS one universal binary in a tar.gz; for Windows
+a zip; and a `SHA256SUMS`.  The packages are made by
+`packaging/package.sh BINARY amd64|arm64 OUTDIR` with nothing but
+`dpkg-deb` and `rpmbuild`, which also works on a desk.  Run by hand
+from the Actions tab, the release workflow builds the same packages
+and keeps them as artifacts without publishing anything.
+
+    sudo dpkg -i bettrsync_0.1.0_amd64.deb      # Debian, Ubuntu
+    sudo rpm -i bettrsync-0.1.0-1.x86_64.rpm    # Fedora, RHEL, SUSE
+
 ## Building and testing
 
 `build.sh` builds in the `rust:bullseye` Docker image when Docker is
